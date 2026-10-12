@@ -2,11 +2,11 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import requests
+import requests import nltk
 from nltk.sentiment.vader import SentimentIntensityAnalyzer as SIA
 import plotly.graph_objects as go
 import time
-
+nltk.download('vader_lexicon', quiet=True)
 st.set_page_config(page_title="Terminal", layout="wide")
 st.title("📈 Asset Intelligence Terminal")
 
