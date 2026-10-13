@@ -11,8 +11,61 @@ import feedparser
 
 nltk.download('vader_lexicon', quiet=True)
 
-st.set_page_config(page_title="Terminal", layout="wide")
+# -----------------------------
+# Dark Mode (forced)
+# -----------------------------
+st.set_page_config(
+    page_title="Terminal",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Force dark theme via CSS (works even if user has light browser preference)
+st.markdown("""
+<style>
+    /* Main app background */
+    .stApp {
+        background-color: #0e1117;
+        color: #fafafa;
+    }
+    /* Sidebar */
+    section[data-testid="stSidebar"] {
+        background-color: #1a1d24;
+    }
+    /* Headers & text */
+    h1, h2, h3, h4, h5, h6, p, label, .stMarkdown {
+        color: #fafafa !important;
+    }
+    /* Metrics */
+    [data-testid="stMetricValue"] {
+        color: #00FF7F !important;
+    }
+    /* Dataframes */
+    .stDataFrame {
+        background-color: #1a1d24;
+    }
+    /* Expanders */
+    .streamlit-expanderHeader {
+        background-color: #1a1d24;
+        color: #fafafa;
+    }
+    /* Inputs */
+    .stTextInput > div > div > input,
+    .stSelectbox > div > div,
+    .stSlider {
+        background-color: #262730;
+        color: #fafafa;
+    }
+    /* Success / info boxes */
+    .stSuccess, .stInfo, .stWarning, .stError {
+        background-color: #1a1d24;
+    }
+    /* Plotly containers already dark */
+</style>
+""", unsafe_allow_html=True)
+
 st.title("📈 Asset Intelligence Terminal")
+st.caption("Dark mode forced • Real BTC on-chain data from Blockchain.com")
 
 # -----------------------------
 # Sidebar Controls
@@ -89,7 +142,6 @@ def get_crypto_news(max_items: int = 12):
                 published = entry.get("published", entry.get("updated", "Unknown"))
                 summary = entry.get("summary", "")
                 if summary:
-                    # Clean basic HTML
                     summary = summary.replace("<p>", "").replace("</p>", "")[:260] + "..."
                 articles.append({
                     "title": entry.get("title", "No title"),
@@ -101,9 +153,54 @@ def get_crypto_news(max_items: int = 12):
         except Exception:
             continue
 
-    # Simple sort attempt (newest first)
     articles = sorted(articles, key=lambda x: x["published"], reverse=True)
     return articles[:max_items]
+
+
+@st.cache_data(ttl=180)
+def get_real_onchain(ticker: str):
+    """
+    Real on-chain data (keyless).
+    Currently full support for BTC / BTC-USD via Blockchain.com.
+    Other assets return a clear message.
+    """
+    t = ticker.upper().replace("-USD", "").replace("USDT", "")
+    
+    if t in ["BTC", "BITCOIN"]:
+        try:
+            # Main stats
+            stats = requests.get("https://api.blockchain.info/stats", timeout=8).json()
+            
+            # Latest unique addresses (last few days)
+            addr_resp = requests.get(
+                "https://api.blockchain.info/charts/n-unique-addresses?timespan=5days&format=json",
+                timeout=8
+            ).json()
+            latest_addr = int(addr_resp["values"][-1]["y"]) if addr_resp.get("values") else "N/A"
+            
+            # Hash rate is in GH/s in the API → convert to EH/s for readability
+            hash_rate_ehs = stats.get("hash_rate", 0) / 1e9   # approx to EH/s
+            
+            return {
+                "Network": "Bitcoin",
+                "Hash Rate (EH/s)": f"{hash_rate_ehs:,.1f}",
+                "Difficulty": f"{stats.get('difficulty', 0):,.0f}",
+                "24h Transactions": f"{stats.get('n_tx', 0):,}",
+                "Blocks Mined (24h)": stats.get("n_blocks_mined", "N/A"),
+                "Avg Minutes/Block": f"{stats.get('minutes_between_blocks', 0):.2f}",
+                "Unique Addresses (latest)": f"{latest_addr:,}" if isinstance(latest_addr, int) else latest_addr,
+                "Est. Tx Volume (USD)": f"${stats.get('estimated_transaction_volume_usd', 0):,.0f}",
+                "Total BTC in Circulation": f"{stats.get('totalbc', 0) / 1e8:,.0f}",
+                "Source": "Blockchain.com (live)"
+            }
+        except Exception as e:
+            return {"Error": f"Failed to fetch BTC on-chain: {e}"}
+    
+    # For other cryptos we currently don't have reliable free keyless sources
+    return {
+        "Note": f"Real on-chain metrics for {ticker} require a paid or keyed API (Glassnode, CryptoQuant, Etherscan, etc.).",
+        "Status": "Only Bitcoin has full free keyless support in this terminal right now."
+    }
 
 
 # -----------------------------
@@ -151,20 +248,10 @@ for t, hist in data.items():
         "longs": long_r, "shorts": short_r
     }
 
-    is_crypto = "-USD" in t or t in ["BTC", "ETH", "SOL", "ADA", "XRP"]
+    # Real on-chain (only for crypto tickers)
+    is_crypto = "-USD" in t or t in ["BTC", "ETH", "SOL", "ADA", "XRP", "BITCOIN", "ETHEREUM"]
     if is_crypto:
-        whale_accum = min(95.0, max(5.0, 52.0 + (delta * 1.5) + (intensity * 2)))
-        active_addr = int(v_now / (c_px * 2) if c_px > 0 else 1000)
-        hash_health = "🟢 Secure" if intensity > 1.1 else "⚪ Stable"
-        net_stage = "Accumulation" if whale_accum > 55 else "Distribution"
-
-        onchain_profiles[t] = {
-            "Whale Accumulation %": f"{whale_accum:.1f}%",
-            "Exchange Inflow Weight": f"{(100.0 - whale_accum):.1f}%",
-            "Est. Active Addresses": f"{active_addr:,}",
-            "Network Security Status": hash_health,
-            "On-Chain Cycle Phase": net_stage
-        }
+        onchain_profiles[t] = get_real_onchain(t)
 
     l_sess = display_hist.iloc[-2] if len(display_hist) > 1 else display_hist.iloc[-1]
     piv = (float(l_sess["high"]) + float(l_sess["low"]) + float(l_sess["close"])) / 3
@@ -189,7 +276,8 @@ st.subheader("📊 Comparative Relative Performance (% Returns)")
 fig = go.Figure()
 for col in combined_df.columns:
     fig.add_trace(go.Scatter(x=combined_df.index, y=combined_df[col], name=col))
-fig.update_layout(height=350, template="plotly_dark", margin=dict(l=10, r=10, t=30, b=10))
+fig.update_layout(height=350, template="plotly_dark", margin=dict(l=10, r=10, t=30, b=10),
+                  paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
 st.plotly_chart(fig, use_container_width=True)
 
 st.subheader("🔥 Asset Analysis Frameworks")
@@ -218,7 +306,8 @@ if m_tgt:
 
     fig_sma.update_layout(
         height=380, template="plotly_dark",
-        yaxis_title="Price ($)", margin=dict(l=10, r=10, t=10, b=10)
+        yaxis_title="Price ($)", margin=dict(l=10, r=10, t=10, b=10),
+        paper_bgcolor="#0e1117", plot_bgcolor="#0e1117"
     )
     st.plotly_chart(fig_sma, use_container_width=True)
 
@@ -231,7 +320,8 @@ if m_tgt:
 
     fig_map = go.Figure()
     fig_map.add_trace(go.Bar(x=labels, y=levels, marker=dict(color=levels, colorscale="Portland")))
-    fig_map.update_layout(height=320, template="plotly_dark", title=f"{m_tgt} Simulated Levels")
+    fig_map.update_layout(height=320, template="plotly_dark", title=f"{m_tgt} Simulated Levels",
+                          paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
     st.plotly_chart(fig_map, use_container_width=True)
 
 st.subheader("📊 Simulated Leverage Allocation")
@@ -240,13 +330,20 @@ c_as = list(liquidity_profiles.keys())
 fig_c = go.Figure()
 fig_c.add_trace(go.Bar(x=c_as, y=[liquidity_profiles[k]["longs"] for k in c_as], name="Long", marker_color="green"))
 fig_c.add_trace(go.Bar(x=c_as, y=[liquidity_profiles[k]["shorts"] for k in c_as], name="Short", marker_color="red"))
-fig_c.update_layout(height=300, barmode="group", template="plotly_dark")
+fig_c.update_layout(height=300, barmode="group", template="plotly_dark",
+                    paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
 st.plotly_chart(fig_c, use_container_width=True)
 
+# Real On-Chain section
 if onchain_profiles:
-    st.subheader("🔗 Simulated On-Chain Proxy Metrics")
-    st.caption("⚠️ These values are calculated only from price & volume. They are **not** real on-chain data.")
-    st.dataframe(pd.DataFrame(onchain_profiles).T, use_container_width=True)
+    st.subheader("🔗 Real On-Chain Metrics")
+    st.caption("✅ Bitcoin data is live from Blockchain.com (keyless). Other assets currently require paid APIs.")
+    
+    for ticker, metrics in onchain_profiles.items():
+        st.markdown(f"**{ticker}**")
+        # Convert to nice dataframe
+        df_on = pd.DataFrame(list(metrics.items()), columns=["Metric", "Value"])
+        st.dataframe(df_on, use_container_width=True, hide_index=True)
 
 if matrix_rows:
     st.subheader("🧮 Side-by-Side Pivot Matrix (Support & Resistance)")
@@ -272,7 +369,6 @@ with col1:
                 if art["summary"]:
                     st.write(art["summary"])
                 
-                # Sentiment on title
                 score = sia.polarity_scores(art["title"])["compound"]
                 if score >= 0.05:
                     st.success(f"🟢 Bullish leaning ({score:+.2f})")
