@@ -1,1 +1,1 @@
-# OneStopInfoSpot
+# crypto-terminal
