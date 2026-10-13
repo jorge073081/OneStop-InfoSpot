@@ -7,6 +7,7 @@ import nltk
 from nltk.sentiment.vader import SentimentIntensityAnalyzer as SIA
 import plotly.graph_objects as go
 from streamlit_autorefresh import st_autorefresh
+import feedparser
 
 nltk.download('vader_lexicon', quiet=True)
 
@@ -21,7 +22,7 @@ t_raw = st.sidebar.text_input("Enter Tickers (commas):", value="BTC-USD, AAPL")
 tkrs = [t.strip().upper() for t in t_raw.split(",") if t.strip()]
 
 res_disp = st.sidebar.selectbox("Resolution", ["Weekly (1w)", "Daily (1d)"])
-rf_rate = st.sidebar.slider("Refresh Rate (Seconds)", 10, 120, 30)
+rf_rate = st.sidebar.slider("Refresh Rate (Seconds)", 15, 120, 45)
 
 show_sma50 = st.sidebar.checkbox("Show 50-Period SMA", value=True)
 show_sma200 = st.sidebar.checkbox("Show 200-Period SMA", value=True)
@@ -35,7 +36,7 @@ else:
 st_autorefresh(interval=rf_rate * 1000, key="datarefresh")
 
 # -----------------------------
-# Real Fear & Greed
+# Helper Functions
 # -----------------------------
 @st.cache_data(ttl=300)
 def get_fear_greed():
@@ -46,9 +47,7 @@ def get_fear_greed():
     except Exception:
         return "N/A", "Unavailable"
 
-# -----------------------------
-# Cached data loader
-# -----------------------------
+
 @st.cache_data(ttl=60, show_spinner="Fetching market data...")
 def load_ticker_data(tickers: tuple, interval: str, lookback: int):
     results = {}
@@ -73,8 +72,42 @@ def load_ticker_data(tickers: tuple, interval: str, lookback: int):
             st.warning(f"Could not load {t}: {e}")
     return results
 
+
+@st.cache_data(ttl=300)
+def get_crypto_news(max_items: int = 12):
+    feeds = {
+        "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
+        "CoinTelegraph": "https://cointelegraph.com/rss",
+        "Decrypt": "https://decrypt.co/feed"
+    }
+
+    articles = []
+    for source, url in feeds.items():
+        try:
+            feed = feedparser.parse(url)
+            for entry in feed.entries[:5]:
+                published = entry.get("published", entry.get("updated", "Unknown"))
+                summary = entry.get("summary", "")
+                if summary:
+                    # Clean basic HTML
+                    summary = summary.replace("<p>", "").replace("</p>", "")[:260] + "..."
+                articles.append({
+                    "title": entry.get("title", "No title"),
+                    "link": entry.get("link", "#"),
+                    "source": source,
+                    "published": published,
+                    "summary": summary
+                })
+        except Exception:
+            continue
+
+    # Simple sort attempt (newest first)
+    articles = sorted(articles, key=lambda x: x["published"], reverse=True)
+    return articles[:max_items]
+
+
 # -----------------------------
-# Load data
+# Load Data
 # -----------------------------
 if not tkrs:
     st.info("Enter at least one ticker in the sidebar.")
@@ -108,7 +141,6 @@ for t, hist in data.items():
     v_avg = float(display_hist["volume"].mean()) if "volume" in display_hist.columns else 1.0
     intensity = v_now / v_avg if v_avg > 0 else 1.0
 
-    # Synthetic long/short (kept but will be clearly labeled)
     long_r = min(75.0, 50.0 + (intensity * 3)) if delta > 0 else 100.0 - min(75.0, 50.0 + (intensity * 3))
     short_r = 100.0 - long_r
 
@@ -166,18 +198,28 @@ m_tgt = st.selectbox("Select Target Asset View:", list(liquidity_profiles.keys()
 if m_tgt:
     st.markdown(f"#### 📈 {m_tgt} Price Chart + SMAs")
     h_data = chart_historical_store[m_tgt]
+
     fig_sma = go.Figure()
-    fig_sma.add_trace(go.Scatter(x=h_data.index, y=h_data["close"], name="Spot Price", line=dict(color="#00FFFF", width=2)))
+    fig_sma.add_trace(go.Scatter(
+        x=h_data.index, y=h_data["close"],
+        name="Spot Price", line=dict(color="#00FFFF", width=2)
+    ))
 
     if show_sma50:
-        fig_sma.add_trace(go.Scatter(x=h_data.index, y=h_data["sma50"], name="SMA 50",
-                                     line=dict(color="#00FF7F", width=1.5, dash="dash")))
+        fig_sma.add_trace(go.Scatter(
+            x=h_data.index, y=h_data["sma50"],
+            name="SMA 50", line=dict(color="#00FF7F", width=1.5, dash="dash")
+        ))
     if show_sma200:
-        fig_sma.add_trace(go.Scatter(x=h_data.index, y=h_data["sma200"], name="SMA 200",
-                                     line=dict(color="#FF4500", width=1.5)))
+        fig_sma.add_trace(go.Scatter(
+            x=h_data.index, y=h_data["sma200"],
+            name="SMA 200", line=dict(color="#FF4500", width=1.5)
+        ))
 
-    fig_sma.update_layout(height=380, template="plotly_dark", yaxis_title="Price ($)",
-                          margin=dict(l=10, r=10, t=10, b=10))
+    fig_sma.update_layout(
+        height=380, template="plotly_dark",
+        yaxis_title="Price ($)", margin=dict(l=10, r=10, t=10, b=10)
+    )
     st.plotly_chart(fig_sma, use_container_width=True)
 
     # Simulated liquidity map
@@ -217,44 +259,36 @@ st.markdown("---")
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("Live Blockchain Media Center")
-    articles = [
-        {
-            "t": "💥 BREAKING: Layer-2 Zero-Knowledge Rollup Milestone Reached",
-            "src": "TechRadar Blockchain", "age": "4 hours ago",
-            "body": "A major production network upgrade has deployed zk-SNARK protocols natively into cross-chain bridges. Early diagnostic logs indicate data batching costs have dropped by 82%."
-        },
-        {
-            "t": "📰 INTEL: Smart Contract Automation Engines Hit Core Ledgers",
-            "src": "Web3 Infrastructure Logs", "age": "2 days ago",
-            "body": "Developers have successfully integrated automated keepers into main ledger layers, allowing execution protocols to settle autonomously based on gas thresholds."
-        }
-    ]
-    for art in articles:
-        with st.expander(f"{art['t']} ({art['age']})"):
-            st.markdown(f"**Publisher:** *{art['src']}* | **Timeline:** {art['age']}")
-            st.info(art["body"])
+    st.subheader("📰 Live Crypto News Feed")
+    news = get_crypto_news(12)
+
+    if not news:
+        st.warning("Could not load news feeds at the moment.")
+    else:
+        sia = SIA()
+        for art in news:
+            with st.expander(f"{art['title']}"):
+                st.markdown(f"**Source:** {art['source']}  \n**Published:** {art['published']}")
+                if art["summary"]:
+                    st.write(art["summary"])
+                
+                # Sentiment on title
+                score = sia.polarity_scores(art["title"])["compound"]
+                if score >= 0.05:
+                    st.success(f"🟢 Bullish leaning ({score:+.2f})")
+                elif score <= -0.05:
+                    st.error(f"🔴 Bearish leaning ({score:+.2f})")
+                else:
+                    st.info(f"⚪ Neutral ({score:+.2f})")
+                
+                st.markdown(f"[Read full article →]({art['link']})")
 
 with col2:
     st.subheader("📊 Sentiment Engine")
     fng_v, fng_c = get_fear_greed()
     st.metric(label="Fear & Greed Index", value=f"{fng_v}/100", delta=fng_c)
 
-    st.markdown("#### 📰 Sample Headlines (Static Demo)")
-    sia = SIA()
-    h_lines = [
-        "Morgan Stanley establishes Wall Street tokenization lab for asset infrastructure.",
-        "CFTC moves to set unified oversight rules for crypto leverage markets.",
-        "Exchange pauses routing networks temporarily following security exploit logs."
-    ]
-    for h in h_lines:
-        score = sia.polarity_scores(h)["compound"]
-        st.write(f"**News:** *{h}*")
-        if score >= 0.05:
-            st.success(f"🟢 Bullish Signal (Score: {score:+.2f})")
-        elif score <= -0.05:
-            st.error(f"🔴 Bearish Signal (Score: {score:+.2f})")
-        else:
-            st.info(f"⚪ Neutral Marker (Score: {score:+.2f})")
+    st.markdown("#### Market Context")
+    st.info("Fear & Greed is pulled live from alternative.me. News sentiment is calculated with VADER on real headlines.")
 
 st.sidebar.success(f"Last refresh: {pd.Timestamp.now().strftime('%H:%M:%S')}")
