@@ -27,7 +27,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("📈 Asset Intelligence Terminal")
-st.caption("Dark mode • Real BTC on-chain • RSI • MACD • Bollinger • Volume Profile")
+st.caption("Dark mode • Real BTC on-chain • RSI • MACD • Bollinger • Volume Profile • Correct Daily Pivots")
 
 # -----------------------------
 # Sidebar
@@ -124,7 +124,6 @@ def load_ticker_data(tickers: tuple, interval: str, lookback: int, period: str, 
                     "close": "last", "volume": "sum"
                 }).dropna()
 
-            # Core indicators
             hist["sma50"] = hist["close"].rolling(50).mean()
             hist["sma200"] = hist["close"].rolling(200).mean()
             hist["rsi"] = compute_rsi(hist["close"])
@@ -136,6 +135,39 @@ def load_ticker_data(tickers: tuple, interval: str, lookback: int, period: str, 
         except Exception as e:
             st.warning(f"Could not load {t}: {e}")
     return results
+
+@st.cache_data(ttl=300)
+def get_daily_pivots(tickers: tuple):
+    """Classic pivots always calculated from the previous daily candle"""
+    pivots = {}
+    for t in tickers:
+        try:
+            daily = yf.Ticker(t).history(period="10d", interval="1d", auto_adjust=True)
+            if len(daily) < 2:
+                continue
+            if isinstance(daily.columns, pd.MultiIndex):
+                daily.columns = daily.columns.get_level_values(0)
+            daily.columns = [str(c).lower() for c in daily.columns]
+
+            prev = daily.iloc[-2]
+            high = float(prev["high"])
+            low = float(prev["low"])
+            close = float(prev["close"])
+
+            pivot = (high + low + close) / 3
+            r1 = (2 * pivot) - low
+            s1 = (2 * pivot) - high
+            r2 = pivot + (high - low)
+            s2 = pivot - (high - low)
+
+            pivots[t] = {
+                "Pivot": pivot,
+                "R1": r1, "R2": r2,
+                "S1": s1, "S2": s2
+            }
+        except Exception:
+            continue
+    return pivots
 
 @st.cache_data(ttl=300)
 def get_crypto_news(max_items=12):
@@ -190,7 +222,10 @@ def get_real_onchain(ticker: str):
             }
         except Exception as e:
             return {"Error": str(e)}
-    return {"Note": f"Real on-chain for {ticker} needs a keyed API.", "Status": "Only BTC fully supported free"}
+    return {
+        "Note": f"Real on-chain for {ticker} needs a keyed API.",
+        "Status": "Only BTC fully supported free"
+    }
 
 # -----------------------------
 # Load Data
@@ -205,6 +240,9 @@ data = load_ticker_data(tuple(tkrs), interval, lookback_bars, period, is_6h)
 if not data:
     st.error("No valid data loaded.")
     st.stop()
+
+# Get correct daily pivots once
+daily_pivots = get_daily_pivots(tuple(tkrs))
 
 # -----------------------------
 # Derived Metrics
@@ -240,16 +278,34 @@ for t, hist in data.items():
     if "-USD" in t or t in ["BTC", "ETH", "SOL", "ADA", "XRP"]:
         onchain_profiles[t] = get_real_onchain(t)
 
-    l_sess = hist.iloc[-2] if len(hist) > 1 else hist.iloc[-1]
-    piv = (float(l_sess["high"]) + float(l_sess["low"]) + float(l_sess["close"])) / 3
-    r1 = (2 * piv) - float(l_sess["low"])
-    s1 = (2 * piv) - float(l_sess["high"])
-
-    matrix_rows.append({
-        "Ticker": t, "Price": f"${c_px:,.2f}", "Change": f"{delta:+.2f}%",
-        "Long %": f"{long_r:.1f}%", "Short %": f"{short_r:.1f}%",
-        "Pivot": f"${piv:,.2f}", "S1": f"${s1:,.2f}", "R1": f"${r1:,.2f}"
-    })
+    # Correct Daily Pivots
+    if t in daily_pivots:
+        p = daily_pivots[t]
+        matrix_rows.append({
+            "Ticker": t,
+            "Price": f"${c_px:,.2f}",
+            "Change": f"{delta:+.2f}%",
+            "Long %": f"{long_r:.1f}%",
+            "Short %": f"{short_r:.1f}%",
+            "Pivot": f"${p['Pivot']:,.2f}",
+            "S1": f"${p['S1']:,.2f}",
+            "S2": f"${p['S2']:,.2f}",
+            "R1": f"${p['R1']:,.2f}",
+            "R2": f"${p['R2']:,.2f}",
+        })
+    else:
+        matrix_rows.append({
+            "Ticker": t,
+            "Price": f"${c_px:,.2f}",
+            "Change": f"{delta:+.2f}%",
+            "Long %": f"{long_r:.1f}%",
+            "Short %": f"{short_r:.1f}%",
+            "Pivot": "N/A",
+            "S1": "N/A",
+            "S2": "N/A",
+            "R1": "N/A",
+            "R2": "N/A",
+        })
 
 # -----------------------------
 # Charts
@@ -268,22 +324,19 @@ m_tgt = st.selectbox("Select Target Asset:", list(liquidity_profiles.keys()))
 if m_tgt:
     h_data = chart_historical_store[m_tgt]
 
-    # Dynamic subplot layout
-    rows = 1  # price always
+    rows = 1
     if show_rsi: rows += 1
     if show_macd: rows += 1
     if show_vol_profile: rows += 1
 
-    row_heights = [0.55] + [0.15] * (rows - 1)
-    if rows == 1:
-        row_heights = [1.0]
+    row_heights = [0.55] + [0.15] * (rows - 1) if rows > 1 else [1.0]
 
     fig = make_subplots(
         rows=rows, cols=1,
         shared_xaxes=True,
         vertical_spacing=0.02,
         row_heights=row_heights,
-        subplot_titles=["Price"] + 
+        subplot_titles=["Price"] +
                        (["RSI (14)"] if show_rsi else []) +
                        (["MACD"] if show_macd else []) +
                        (["Volume Profile"] if show_vol_profile else [])
@@ -291,7 +344,7 @@ if m_tgt:
 
     current_row = 1
 
-    # === PRICE + BB + SMAs ===
+    # Price + BB + SMAs
     fig.add_trace(go.Scatter(x=h_data.index, y=h_data["close"], name="Price",
                              line=dict(color="#00FFFF", width=2)), row=current_row, col=1)
 
@@ -313,7 +366,7 @@ if m_tgt:
 
     current_row += 1
 
-    # === RSI ===
+    # RSI
     if show_rsi:
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["rsi"], name="RSI",
                                  line=dict(color="#FFD700", width=1.5)), row=current_row, col=1)
@@ -323,7 +376,7 @@ if m_tgt:
         fig.update_yaxes(range=[0, 100], row=current_row, col=1)
         current_row += 1
 
-    # === MACD ===
+    # MACD
     if show_macd:
         colors = ["#00FF7F" if v >= 0 else "#FF4500" for v in h_data["macd_hist"]]
         fig.add_trace(go.Bar(x=h_data.index, y=h_data["macd_hist"], name="Histogram",
@@ -334,9 +387,8 @@ if m_tgt:
                                  line=dict(color="#FF69B4", width=1.5)), row=current_row, col=1)
         current_row += 1
 
-    # === Volume Profile (simple but clean) ===
+    # Volume Profile
     if show_vol_profile and "volume" in h_data.columns:
-        # Simple horizontal volume profile using price bins
         price_bins = pd.cut(h_data["close"], bins=24)
         vol_profile = h_data.groupby(price_bins, observed=True)["volume"].sum()
         bin_centers = [interval.mid for interval in vol_profile.index]
@@ -364,15 +416,18 @@ if m_tgt:
     cols = st.columns(4)
     if show_rsi and not h_data["rsi"].isna().all():
         rsi_val = h_data["rsi"].iloc[-1]
-        cols[0].metric("RSI", f"{rsi_val:.1f}", "Overbought" if rsi_val > 70 else "Oversold" if rsi_val < 30 else "Neutral")
+        cols[0].metric("RSI", f"{rsi_val:.1f}",
+                       "Overbought" if rsi_val > 70 else "Oversold" if rsi_val < 30 else "Neutral")
     if show_macd:
         macd_val = h_data["macd"].iloc[-1]
         cols[1].metric("MACD", f"{macd_val:.2f}")
     if show_bb:
-        bb_pos = (h_data["close"].iloc[-1] - h_data["bb_lower"].iloc[-1]) / (h_data["bb_upper"].iloc[-1] - h_data["bb_lower"].iloc[-1])
-        cols[2].metric("%B (BB)", f"{bb_pos*100:.1f}%")
+        bb_range = h_data["bb_upper"].iloc[-1] - h_data["bb_lower"].iloc[-1]
+        if bb_range > 0:
+            bb_pos = (h_data["close"].iloc[-1] - h_data["bb_lower"].iloc[-1]) / bb_range
+            cols[2].metric("%B (BB)", f"{bb_pos*100:.1f}%")
 
-    # Liquidity map (unchanged)
+    # Liquidity map
     st.markdown("#### 🔥 Simulated Liquidity Map")
     st.caption("⚠️ Illustrative only")
     p = liquidity_profiles[m_tgt]
@@ -382,7 +437,7 @@ if m_tgt:
     fig_map.update_layout(height=300, template="plotly_dark", paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
     st.plotly_chart(fig_map, use_container_width=True)
 
-# Rest of the original sections (leverage, on-chain, pivots, news) stay exactly the same
+# Leverage
 st.subheader("📊 Simulated Leverage Allocation")
 c_as = list(liquidity_profiles.keys())
 fig_c = go.Figure()
@@ -391,18 +446,24 @@ fig_c.add_trace(go.Bar(x=c_as, y=[liquidity_profiles[k]["shorts"] for k in c_as]
 fig_c.update_layout(height=280, barmode="group", template="plotly_dark", paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
 st.plotly_chart(fig_c, use_container_width=True)
 
+# On-chain
 if onchain_profiles:
     st.subheader("🔗 Real On-Chain Metrics")
     for ticker, metrics in onchain_profiles.items():
         st.markdown(f"**{ticker}**")
-        st.dataframe(pd.DataFrame(list(metrics.items()), columns=["Metric", "Value"]), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(list(metrics.items()), columns=["Metric", "Value"]),
+                     use_container_width=True, hide_index=True)
 
+# Pivot Matrix (now correct)
 if matrix_rows:
-    st.subheader("🧮 Pivot Matrix")
+    st.subheader("🧮 Side-by-Side Pivot Matrix (Daily Pivots)")
+    st.caption("Classic Floor Pivots calculated from the previous daily candle (correct method)")
     st.dataframe(pd.DataFrame(matrix_rows).set_index("Ticker"), use_container_width=True)
 
+# News & Sentiment
 st.markdown("---")
 col1, col2 = st.columns(2)
+
 with col1:
     st.subheader("📰 Live Crypto News")
     news = get_crypto_news()
