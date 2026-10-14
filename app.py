@@ -30,11 +30,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("📈 Asset Intelligence Terminal")
-st.caption("Dark mode • Real BTC on-chain • RSI • MACD • Bollinger • Volume Profile • Real Long/Short from Binance")
+st.caption("Dark mode • Real Long/Short + Open Interest + Funding Rate from Binance • RSI • MACD • Bollinger • On-chain")
 
+# -----------------------------
 # Sidebar
+# -----------------------------
 st.sidebar.header("Controls")
-t_raw = st.sidebar.text_input("Enter Tickers (commas):", value="BTC-USD, ETH-USD, XRP-USD, SOL-USD")
+t_raw = st.sidebar.text_input("Enter Tickers (commas):", value="BTC-USD, ETH-USD, SOL-USD, XRP-USD")
 tkrs = [t.strip().upper() for t in t_raw.split(",") if t.strip()]
 
 res_disp = st.sidebar.selectbox("Resolution", ["15min", "1hr", "6hr", "Daily (1d)", "Weekly (1w)"])
@@ -293,42 +295,61 @@ def get_real_onchain(ticker: str):
 
     return {"Note": f"No free on-chain data found for {t}", "Source": "Free endpoints only"}
 
-# ---------- NEW: Real Futures Metrics from Binance (no key) ----------
+# ---------- Improved Binance Futures Metrics (Long/Short + OI + Funding) ----------
 @st.cache_data(ttl=60)
 def get_binance_futures_metrics(ticker: str):
-    """Fetch real Long/Short ratio and Open Interest from Binance Futures (free, no key)"""
-    t = ticker.upper().replace("-USD", "").replace("USDT", "").strip()
-    symbol = f"{t}USDT"
+    t = ticker.upper().replace("-USD", "").replace("USDT", "").replace("USD", "").strip()
+    possible_symbols = [f"{t}USDT", f"{t}USD", t]
     
-    result = {"source": "Simulated (no Binance perpetual)", "long_pct": 50.0, "short_pct": 50.0, "oi": None}
+    result = {
+        "source": "Simulated (no Binance data)",
+        "long_pct": 50.0,
+        "short_pct": 50.0,
+        "oi": None,
+        "funding_rate": None
+    }
     
-    try:
-        # Global Long/Short Account Ratio
-        url_ls = f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol={symbol}&period=1h&limit=1"
-        r = requests.get(url_ls, headers=HEADERS, timeout=8)
-        if r.status_code == 200:
-            data = r.json()
-            if data and len(data) > 0:
-                long_account = float(data[0].get("longAccount", 0.5))
-                short_account = float(data[0].get("shortAccount", 0.5))
-                total = long_account + short_account
-                if total > 0:
-                    result["long_pct"] = round(long_account / total * 100, 1)
-                    result["short_pct"] = round(short_account / total * 100, 1)
-                    result["source"] = "Binance Global Long/Short (real-time)"
-        
-        # Open Interest
-        url_oi = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}"
-        r2 = requests.get(url_oi, headers=HEADERS, timeout=8)
-        if r2.status_code == 200:
-            oi_data = r2.json()
-            oi_val = float(oi_data.get("openInterest", 0))
-            result["oi"] = oi_val
-            if result["source"].startswith("Simulated"):
-                result["source"] = "Binance Open Interest (real-time)"
+    for symbol in possible_symbols:
+        try:
+            # Long/Short Ratio
+            for period in ["1h", "5m", "15m"]:
+                url_ls = f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol={symbol}&period={period}&limit=1"
+                r = requests.get(url_ls, headers=HEADERS, timeout=8)
+                if r.status_code == 200:
+                    data = r.json()
+                    if isinstance(data, list) and len(data) > 0:
+                        item = data[0]
+                        long_account = float(item.get("longAccount", 0.5))
+                        short_account = float(item.get("shortAccount", 0.5))
+                        total = long_account + short_account
+                        if total > 0:
+                            result["long_pct"] = round((long_account / total) * 100, 1)
+                            result["short_pct"] = round((short_account / total) * 100, 1)
+                            result["source"] = f"Binance Global L/S ({period})"
+                            break
+            
+            # Open Interest
+            url_oi = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}"
+            r2 = requests.get(url_oi, headers=HEADERS, timeout=8)
+            if r2.status_code == 200:
+                oi_data = r2.json()
+                oi_val = float(oi_data.get("openInterest", 0))
+                if oi_val > 0:
+                    result["oi"] = oi_val
+            
+            # Funding Rate
+            url_fund = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={symbol}"
+            r3 = requests.get(url_fund, headers=HEADERS, timeout=8)
+            if r3.status_code == 200:
+                fund_data = r3.json()
+                fr = float(fund_data.get("lastFundingRate", 0))
+                result["funding_rate"] = fr * 100  # convert to %
+            
+            if "Binance" in result["source"]:
+                break
                 
-    except Exception:
-        pass
+        except Exception:
+            continue
     
     return result
 
@@ -364,6 +385,7 @@ matrix_rows = []
 liquidity_profiles = {}
 onchain_profiles = {}
 chart_historical_store = data
+futures_table_rows = []
 
 for t, hist in data.items():
     s_px = float(hist["close"].iloc[0])
@@ -373,11 +395,12 @@ for t, hist in data.items():
     p_px = float(hist["close"].iloc[-2]) if len(hist) > 1 else c_px
     delta = ((c_px - p_px) / p_px) * 100
 
-    # --- Real Long/Short from Binance ---
+    # Real Futures Data
     fut = get_binance_futures_metrics(t)
     long_r = fut["long_pct"]
     short_r = fut["short_pct"]
     oi_val = fut["oi"]
+    funding = fut["funding_rate"]
     source_label = fut["source"]
 
     liquidity_profiles[t] = {
@@ -386,8 +409,19 @@ for t, hist in data.items():
         "100x_s": c_px * 1.01, "50x_s": c_px * 1.02, "25x_s": c_px * 1.04,
         "longs": long_r, "shorts": short_r,
         "oi": oi_val,
+        "funding": funding,
         "source": source_label
     }
+
+    # For the futures table
+    futures_table_rows.append({
+        "Ticker": t,
+        "Long %": f"{long_r:.1f}%",
+        "Short %": f"{short_r:.1f}%",
+        "Open Interest": f"{oi_val:,.0f}" if oi_val else "N/A",
+        "Funding Rate": f"{funding:+.4f}%" if funding is not None else "N/A",
+        "Source": source_label
+    })
 
     if show_onchain and ("-USD" in t or t.replace("-", "").isalpha()):
         onchain_profiles[t] = get_real_onchain(t)
@@ -407,7 +441,9 @@ for t, hist in data.items():
             "Pivot": "N/A", "S1": "N/A", "S2": "N/A", "R1": "N/A", "R2": "N/A"
         })
 
+# -----------------------------
 # Charts
+# -----------------------------
 st.subheader("📊 Comparative Relative Performance")
 fig = go.Figure()
 for col in combined_df.columns:
@@ -518,10 +554,10 @@ if m_tgt:
     if show_vs_btc and "vs_btc" in h_data.columns:
         cols[4].metric("vs BTC", f"{h_data['vs_btc'].iloc[-1]:+.1f}%")
 
-    # Liquidity Map (estimated levels + real sentiment)
-    st.markdown("#### 🔥 Liquidity Map + Real Sentiment")
+    # Liquidity Map
+    st.markdown("#### 🔥 Liquidity Map (Estimated Liquidation Levels)")
     p = liquidity_profiles[m_tgt]
-    st.caption(f"Source: {p['source']} | Liquidation levels are estimated (true heatmaps need paid data)")
+    st.caption(f"Source of Long/Short: **{p['source']}** | Liquidation levels are estimated")
     
     levels = [p["25x_l"], p["50x_l"], p["100x_l"], p["price"], p["100x_s"], p["50x_s"], p["25x_s"]]
     labels = ["25x Long Liq", "50x Long Liq", "100x Long Liq", "Current Price", "100x Short Liq", "50x Short Liq", "25x Short Liq"]
@@ -529,8 +565,13 @@ if m_tgt:
     fig_map.update_layout(height=320, template="plotly_dark", paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
     st.plotly_chart(fig_map, use_container_width=True)
 
-# Real Leverage Allocation
-st.subheader("📊 Real-Time Leverage Allocation (Long vs Short)")
+# Real-time Futures Table
+st.subheader("📊 Real-Time Futures Metrics (Binance)")
+st.caption("Long/Short Account Ratio • Open Interest • Funding Rate (updated ~every minute)")
+st.dataframe(pd.DataFrame(futures_table_rows).set_index("Ticker"), use_container_width=True)
+
+# Leverage Allocation Chart
+st.subheader("📊 Long vs Short Allocation")
 c_as = list(liquidity_profiles.keys())
 fig_c = go.Figure()
 fig_c.add_trace(go.Bar(
@@ -549,19 +590,8 @@ fig_c.add_trace(go.Bar(
     text=[f"{liquidity_profiles[k]['shorts']:.1f}%" for k in c_as],
     textposition="auto"
 ))
-fig_c.update_layout(height=320, barmode="group", template="plotly_dark", paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
-                    yaxis_title="Percentage (%)")
+fig_c.update_layout(height=320, barmode="group", template="plotly_dark", paper_bgcolor="#0e1117", plot_bgcolor="#0e1117", yaxis_title="%")
 st.plotly_chart(fig_c, use_container_width=True)
-
-# Show OI if available
-oi_rows = []
-for k in c_as:
-    oi = liquidity_profiles[k].get("oi")
-    if oi is not None:
-        oi_rows.append({"Ticker": k, "Open Interest (contracts)": f"{oi:,.0f}", "Source": liquidity_profiles[k]["source"]})
-if oi_rows:
-    st.markdown("#### Open Interest (Binance Futures)")
-    st.dataframe(pd.DataFrame(oi_rows), use_container_width=True, hide_index=True)
 
 # On-chain
 if show_onchain and onchain_profiles:
