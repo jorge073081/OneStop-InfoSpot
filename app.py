@@ -27,7 +27,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("📈 Asset Intelligence Terminal")
-st.caption("Dark mode • Real BTC on-chain • RSI • MACD • Bollinger • Volume Profile • Correct Daily Pivots • Baselines • VWAP")
+st.caption("Dark mode • Real BTC on-chain • RSI • MACD • Bollinger • Volume Profile • Correct Daily Pivots • Baselines • VWAP • Free On-chain")
 
 # -----------------------------
 # Sidebar
@@ -219,9 +219,9 @@ def get_crypto_news(max_items=12):
 
 @st.cache_data(ttl=180)
 def get_real_onchain(ticker: str):
-    t = ticker.upper().replace("-USD", "").replace("USDT", "").replace("USD", "")
-
-    # ---------- Bitcoin ----------
+    t = ticker.upper().replace("-USD", "").replace("USDT", "").replace("USD", "").strip()
+    
+    # ---------- 1. Bitcoin (best free data) ----------
     if t in ["BTC", "BITCOIN"]:
         try:
             stats = requests.get("https://api.blockchain.info/stats", timeout=8).json()
@@ -241,71 +241,135 @@ def get_real_onchain(ticker: str):
                 "Unique Addresses (latest)": f"{latest_addr:,}" if isinstance(latest_addr, int) else latest_addr,
                 "Est. Tx Volume (USD)": f"${stats.get('estimated_transaction_volume_usd', 0):,.0f}",
                 "Total BTC in Circulation": f"{stats.get('totalbc', 0) / 1e8:,.0f}",
-                "Source": "Blockchain.com (live)"
+                "Source": "Blockchain.com (live • free)"
             }
         except Exception as e:
-            return {"Error": str(e)}
+            return {"Error": str(e), "Source": "Blockchain.com"}
 
-    # ---------- Ethereum ----------
-    if t in ["ETH", "ETHEREUM"]:
-        try:
-            eth_stats = requests.get("https://api.etherscan.io/api?module=stats&action=ethsupply", timeout=8).json()
-            llama = requests.get("https://api.llama.fi/v2/chains", timeout=8).json()
-            eth_llama = next((c for c in llama if c.get("name") == "Ethereum"), {})
-            return {
-                "Network": "Ethereum",
-                "Circulating Supply (approx)": f"{int(eth_stats.get('result', 0)) / 1e18:,.0f} ETH" if eth_stats.get("status") == "1" else "N/A",
-                "TVL (DefiLlama)": f"${eth_llama.get('tvl', 0):,.0f}" if eth_llama else "N/A",
-                "Chain Rank (by TVL)": eth_llama.get("tvlRank", "N/A"),
-                "Source": "Etherscan + DefiLlama (free)"
-            }
-        except Exception as e:
-            return {"Error": str(e), "Note": "ETH free endpoints limited"}
-
-    # ---------- Other major cryptos via DefiLlama ----------
+    # ---------- 2. DefiLlama (no key needed) ----------
     try:
-        llama_map = {
-            "SOL": "Solana", "ADA": "Cardano", "XRP": "Ripple", "DOGE": "Dogecoin",
-            "AVAX": "Avalanche", "LINK": "Chainlink", "DOT": "Polkadot", "MATIC": "Polygon",
-            "ATOM": "Cosmos", "NEAR": "Near", "FTM": "Fantom", "ALGO": "Algorand",
-            "ICP": "Internet Computer", "FIL": "Filecoin", "LTC": "Litecoin", "BCH": "Bitcoin Cash",
-            "SUI": "Sui", "APT": "Aptos", "SEI": "Sei", "TIA": "Celestia"
+        chains = requests.get("https://api.llama.fi/v2/chains", timeout=10).json()
+        
+        chain_aliases = {
+            "XRP": ["XRPL", "Ripple"],
+            "ETH": ["Ethereum"],
+            "SOL": ["Solana"],
+            "ADA": ["Cardano"],
+            "AVAX": ["Avalanche"],
+            "DOT": ["Polkadot"],
+            "MATIC": ["Polygon"],
+            "POL": ["Polygon"],
+            "ATOM": ["Cosmos", "CosmosHub"],
+            "NEAR": ["Near"],
+            "FTM": ["Fantom"],
+            "ALGO": ["Algorand"],
+            "ICP": ["Internet Computer"],
+            "FIL": ["Filecoin"],
+            "LTC": ["Litecoin"],
+            "BCH": ["Bitcoincash", "Bitcoin Cash"],
+            "SUI": ["Sui"],
+            "APT": ["Aptos"],
+            "SEI": ["Sei"],
+            "TIA": ["Celestia"],
+            "DOGE": ["Doge", "Dogecoin"],
+            "BNB": ["BSC", "Binance"],
+            "ARB": ["Arbitrum"],
+            "OP": ["OP Mainnet", "Optimism"],
         }
-
-        if t in llama_map:
-            chain_name = llama_map[t]
-            llama = requests.get("https://api.llama.fi/v2/chains", timeout=8).json()
-            chain = next((c for c in llama if c.get("name", "").lower() == chain_name.lower()), None)
-
-            if chain:
-                return {
-                    "Network": chain_name,
-                    "TVL": f"${chain.get('tvl', 0):,.0f}",
-                    "TVL Rank": chain.get("tvlRank", "N/A"),
-                    "Token Symbol": chain.get("tokenSymbol", t),
-                    "Source": "DefiLlama (free)"
-                }
-
-        # Try protocol endpoint
-        proto = requests.get(f"https://api.llama.fi/protocol/{t.lower()}", timeout=6)
-        if proto.status_code == 200:
-            data = proto.json()
-            tvl_val = data.get("tvl", 0)
-            if isinstance(tvl_val, list):
-                tvl_val = tvl_val[-1].get("totalLiquidityUSD", 0) if tvl_val else 0
+        
+        search_names = chain_aliases.get(t, [t])
+        matched_chain = None
+        for c in chains:
+            name = c.get("name", "").lower()
+            symbol = (c.get("tokenSymbol") or "").upper()
+            if symbol == t or any(alias.lower() in name for alias in search_names):
+                matched_chain = c
+                break
+        
+        if matched_chain:
             return {
-                "Protocol": data.get("name", t),
-                "TVL": f"${tvl_val:,.0f}" if isinstance(tvl_val, (int, float)) else "N/A",
-                "Category": data.get("category", "N/A"),
-                "Source": "DefiLlama Protocol"
+                "Network / Chain": matched_chain.get("name"),
+                "TVL": f"${matched_chain.get('tvl', 0):,.0f}",
+                "Token Symbol": matched_chain.get("tokenSymbol") or t,
+                "Source": "DefiLlama Chains (free • no key)"
             }
     except Exception:
         pass
 
+    # ---------- 3. Protocol lookup (ONDO, etc.) ----------
+    try:
+        protocol_slugs = {
+            "ONDO": "ondo-finance",
+            "AAVE": "aave",
+            "UNI": "uniswap",
+            "LINK": "chainlink",
+            "MKR": "makerdao",
+            "CRV": "curve-dex",
+            "LDO": "lido",
+            "PENDLE": "pendle",
+            "JUP": "jupiter-exchange-solana",
+            "RAY": "raydium",
+            "ORCA": "orca",
+            "INJ": "injective-protocol",
+        }
+        
+        slug = protocol_slugs.get(t, t.lower().replace(" ", "-"))
+        
+        tvl_resp = requests.get(f"https://api.llama.fi/tvl/{slug}", timeout=8)
+        if tvl_resp.status_code == 200:
+            tvl_val = tvl_resp.json()
+            if isinstance(tvl_val, (int, float)) and tvl_val > 0:
+                return {
+                    "Protocol": t,
+                    "TVL": f"${tvl_val:,.0f}",
+                    "Source": "DefiLlama Protocol (free)"
+                }
+        
+        proto = requests.get(f"https://api.llama.fi/protocol/{slug}", timeout=8)
+        if proto.status_code == 200:
+            data = proto.json()
+            tvl = data.get("tvl")
+            if isinstance(tvl, list) and tvl:
+                tvl = tvl[-1].get("totalLiquidityUSD", 0) if isinstance(tvl[-1], dict) else 0
+            elif not isinstance(tvl, (int, float)):
+                tvl = data.get("currentChainTvls", {})
+                tvl = sum(tvl.values()) if isinstance(tvl, dict) else 0
+            
+            result = {
+                "Protocol": data.get("name", t),
+                "Category": data.get("category", "N/A"),
+                "Symbol": data.get("symbol", t),
+                "Source": "DefiLlama Protocol (free)"
+            }
+            if tvl and tvl > 0:
+                result["TVL"] = f"${tvl:,.0f}"
+            if data.get("mcap"):
+                result["Market Cap"] = f"${data['mcap']:,.0f}"
+            return result
+    except Exception:
+        pass
+
+    # ---------- 4. XRP special free endpoints ----------
+    if t == "XRP":
+        try:
+            stats = requests.get("https://api.xrpl.to/v1/stats", timeout=8).json()
+            h24 = stats.get("H24", {})
+            return {
+                "Network": "XRP Ledger (XRPL)",
+                "24h Transactions": f"{h24.get('transactions24H', 'N/A'):,}" if isinstance(h24.get('transactions24H'), int) else "N/A",
+                "Unique Traders (24h)": f"{h24.get('uniqueTraders24H', 'N/A'):,}" if isinstance(h24.get('uniqueTraders24H'), int) else "N/A",
+                "Tokens Traded (24h)": h24.get("tradedTokens24H", "N/A"),
+                "Source": "XRPL.to + DefiLlama (free)"
+            }
+        except Exception:
+            pass
+
+    # ---------- Final fallback ----------
     return {
-        "Note": f"Limited free on-chain data for {ticker}",
-        "Status": "BTC fully supported • ETH partial • Major L1s via DefiLlama TVL",
-        "Tip": "Deep metrics (active addresses, fees, etc.) require paid APIs (Glassnode / CryptoQuant / Dune)"
+        "Note": f"Limited free on-chain data available for {ticker}",
+        "Status": "BTC = full stats • Major L1s & many protocols = DefiLlama TVL",
+        "Tip": "Deep metrics (active addresses, fees, holders) usually need a paid key (Glassnode, CryptoQuant, Dune, etc.)",
+        "Source": "Free endpoints only"
     }
 
 # -----------------------------
@@ -367,8 +431,9 @@ for t, hist in data.items():
         "longs": long_r, "shorts": short_r
     }
 
-    if show_onchain and ("-USD" in t or t in ["BTC", "ETH", "SOL", "ADA", "XRP", "DOGE", "AVAX", "LINK"]):
-        onchain_profiles[t] = get_real_onchain(t)
+    if show_onchain:
+        if "-USD" in t or t.replace("-", "").isalpha():
+            onchain_profiles[t] = get_real_onchain(t)
 
     # Correct Daily Pivots
     if t in daily_pivots:
@@ -430,7 +495,6 @@ if m_tgt:
 
     # Relative strength vs BTC
     if show_vs_btc and btc_data is not None:
-        # Align indexes
         common_idx = h_data.index.intersection(btc_data.index)
         if len(common_idx) > 5:
             asset_norm = h_data.loc[common_idx, "close"] / h_data.loc[common_idx, "close"].iloc[0]
