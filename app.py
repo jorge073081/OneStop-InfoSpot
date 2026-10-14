@@ -11,11 +11,8 @@ from streamlit_autorefresh import st_autorefresh
 import feedparser
 
 nltk.download('vader_lexicon', quiet=True)
-
-# Clear cache every time the app starts
 st.cache_data.clear()
 
-# Common headers that work better on Streamlit Cloud
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "application/json"
@@ -33,13 +30,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("📈 Asset Intelligence Terminal")
-st.caption("Dark mode • Real BTC on-chain • RSI • MACD • Bollinger • Volume Profile • Correct Daily Pivots • Baselines • VWAP")
+st.caption("Dark mode • Real BTC on-chain • RSI • MACD • Bollinger • Volume Profile • Real Long/Short from Binance")
 
-# -----------------------------
 # Sidebar
-# -----------------------------
 st.sidebar.header("Controls")
-t_raw = st.sidebar.text_input("Enter Tickers (commas):", value="BTC-USD, ETH-USD, XRP-USD, ONDO-USD")
+t_raw = st.sidebar.text_input("Enter Tickers (commas):", value="BTC-USD, ETH-USD, XRP-USD, SOL-USD")
 tkrs = [t.strip().upper() for t in t_raw.split(",") if t.strip()]
 
 res_disp = st.sidebar.selectbox("Resolution", ["15min", "1hr", "6hr", "Daily (1d)", "Weekly (1w)"])
@@ -203,7 +198,6 @@ def get_crypto_news(max_items=12):
 def get_real_onchain(ticker: str):
     t = ticker.upper().replace("-USD", "").replace("USDT", "").replace("USD", "").strip()
     
-    # 1. Bitcoin
     if t in ["BTC", "BITCOIN"]:
         try:
             stats = requests.get("https://api.blockchain.info/stats", headers=HEADERS, timeout=10).json()
@@ -228,11 +222,9 @@ def get_real_onchain(ticker: str):
         except Exception as e:
             return {"Error": f"BTC failed: {str(e)[:100]}"}
 
-    # 2. DefiLlama Chains
     try:
         r = requests.get("https://api.llama.fi/v2/chains", headers=HEADERS, timeout=12)
         chains = r.json()
-        
         matched = None
         for c in chains:
             name = (c.get("name") or "").lower()
@@ -243,7 +235,6 @@ def get_real_onchain(ticker: str):
             if t.lower() in name:
                 matched = c
                 break
-        
         if matched:
             return {
                 "Network / Chain": matched.get("name"),
@@ -251,24 +242,18 @@ def get_real_onchain(ticker: str):
                 "Token Symbol": matched.get("tokenSymbol") or t,
                 "Source": "DefiLlama (free)"
             }
-    except Exception as e:
+    except Exception:
         pass
 
-    # 3. DefiLlama Protocol
     try:
-        slug_map = {
-            "ONDO": "ondo-finance", "AAVE": "aave", "UNI": "uniswap", "LINK": "chainlink",
-            "LDO": "lido", "MKR": "makerdao", "CRV": "curve-dex", "PENDLE": "pendle",
-            "JUP": "jupiter-exchange-solana", "INJ": "injective-protocol"
-        }
+        slug_map = {"ONDO": "ondo-finance", "AAVE": "aave", "UNI": "uniswap", "LINK": "chainlink",
+                    "LDO": "lido", "MKR": "makerdao", "CRV": "curve-dex", "PENDLE": "pendle"}
         slug = slug_map.get(t, t.lower())
-        
         r = requests.get(f"https://api.llama.fi/tvl/{slug}", headers=HEADERS, timeout=10)
         if r.status_code == 200:
             val = r.json()
             if isinstance(val, (int, float)) and val > 0:
                 return {"Protocol": t, "TVL": f"${val:,.0f}", "Source": "DefiLlama Protocol (free)"}
-        
         r2 = requests.get(f"https://api.llama.fi/protocol/{slug}", headers=HEADERS, timeout=10)
         if r2.status_code == 200:
             data = r2.json()
@@ -282,13 +267,12 @@ def get_real_onchain(ticker: str):
     except Exception:
         pass
 
-    # 4. CoinGecko keyless
     try:
         cg_ids = {
             "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "XRP": "ripple",
             "ADA": "cardano", "AVAX": "avalanche-2", "DOT": "polkadot", "DOGE": "dogecoin",
             "LINK": "chainlink", "ONDO": "ondo-finance", "NEAR": "near", "ATOM": "cosmos",
-            "SUI": "sui", "APT": "aptos", "SEI": "sei-network", "TIA": "celestia"
+            "SUI": "sui", "APT": "aptos"
         }
         cg_id = cg_ids.get(t, t.lower())
         url = f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies=usd&include_market_cap=true&include_24hr_vol=true"
@@ -307,11 +291,46 @@ def get_real_onchain(ticker: str):
     except Exception as e:
         return {"Error": f"All free sources failed for {t}", "Details": str(e)[:120]}
 
-    return {
-        "Note": f"No free on-chain data found for {t}",
-        "Tip": "BTC works best. Others use DefiLlama + CoinGecko free tiers.",
-        "Source": "Free endpoints only"
-    }
+    return {"Note": f"No free on-chain data found for {t}", "Source": "Free endpoints only"}
+
+# ---------- NEW: Real Futures Metrics from Binance (no key) ----------
+@st.cache_data(ttl=60)
+def get_binance_futures_metrics(ticker: str):
+    """Fetch real Long/Short ratio and Open Interest from Binance Futures (free, no key)"""
+    t = ticker.upper().replace("-USD", "").replace("USDT", "").strip()
+    symbol = f"{t}USDT"
+    
+    result = {"source": "Simulated (no Binance perpetual)", "long_pct": 50.0, "short_pct": 50.0, "oi": None}
+    
+    try:
+        # Global Long/Short Account Ratio
+        url_ls = f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol={symbol}&period=1h&limit=1"
+        r = requests.get(url_ls, headers=HEADERS, timeout=8)
+        if r.status_code == 200:
+            data = r.json()
+            if data and len(data) > 0:
+                long_account = float(data[0].get("longAccount", 0.5))
+                short_account = float(data[0].get("shortAccount", 0.5))
+                total = long_account + short_account
+                if total > 0:
+                    result["long_pct"] = round(long_account / total * 100, 1)
+                    result["short_pct"] = round(short_account / total * 100, 1)
+                    result["source"] = "Binance Global Long/Short (real-time)"
+        
+        # Open Interest
+        url_oi = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}"
+        r2 = requests.get(url_oi, headers=HEADERS, timeout=8)
+        if r2.status_code == 200:
+            oi_data = r2.json()
+            oi_val = float(oi_data.get("openInterest", 0))
+            result["oi"] = oi_val
+            if result["source"].startswith("Simulated"):
+                result["source"] = "Binance Open Interest (real-time)"
+                
+    except Exception:
+        pass
+    
+    return result
 
 # -----------------------------
 # Load Data
@@ -354,18 +373,20 @@ for t, hist in data.items():
     p_px = float(hist["close"].iloc[-2]) if len(hist) > 1 else c_px
     delta = ((c_px - p_px) / p_px) * 100
 
-    v_now = float(hist["volume"].iloc[-1]) if "volume" in hist.columns else 1.0
-    v_avg = float(hist["volume"].mean()) if "volume" in hist.columns else 1.0
-    intensity = v_now / v_avg if v_avg > 0 else 1.0
-
-    long_r = min(75.0, 50.0 + (intensity * 3)) if delta > 0 else 100.0 - min(75.0, 50.0 + (intensity * 3))
-    short_r = 100.0 - long_r
+    # --- Real Long/Short from Binance ---
+    fut = get_binance_futures_metrics(t)
+    long_r = fut["long_pct"]
+    short_r = fut["short_pct"]
+    oi_val = fut["oi"]
+    source_label = fut["source"]
 
     liquidity_profiles[t] = {
         "price": c_px,
         "100x_l": c_px * 0.99, "50x_l": c_px * 0.98, "25x_l": c_px * 0.96,
         "100x_s": c_px * 1.01, "50x_s": c_px * 1.02, "25x_s": c_px * 1.04,
-        "longs": long_r, "shorts": short_r
+        "longs": long_r, "shorts": short_r,
+        "oi": oi_val,
+        "source": source_label
     }
 
     if show_onchain and ("-USD" in t or t.replace("-", "").isalpha()):
@@ -497,24 +518,52 @@ if m_tgt:
     if show_vs_btc and "vs_btc" in h_data.columns:
         cols[4].metric("vs BTC", f"{h_data['vs_btc'].iloc[-1]:+.1f}%")
 
-    st.markdown("#### 🔥 Simulated Liquidity Map")
-    st.caption("⚠️ Illustrative only")
+    # Liquidity Map (estimated levels + real sentiment)
+    st.markdown("#### 🔥 Liquidity Map + Real Sentiment")
     p = liquidity_profiles[m_tgt]
+    st.caption(f"Source: {p['source']} | Liquidation levels are estimated (true heatmaps need paid data)")
+    
     levels = [p["25x_l"], p["50x_l"], p["100x_l"], p["price"], p["100x_s"], p["50x_s"], p["25x_s"]]
-    labels = ["25x Long", "50x Long", "100x Long", "Spot", "100x Short", "50x Short", "25x Short"]
+    labels = ["25x Long Liq", "50x Long Liq", "100x Long Liq", "Current Price", "100x Short Liq", "50x Short Liq", "25x Short Liq"]
     fig_map = go.Figure(go.Bar(x=labels, y=levels, marker=dict(color=levels, colorscale="Portland")))
-    fig_map.update_layout(height=300, template="plotly_dark", paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
+    fig_map.update_layout(height=320, template="plotly_dark", paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
     st.plotly_chart(fig_map, use_container_width=True)
 
-st.subheader("📊 Simulated Leverage Allocation")
+# Real Leverage Allocation
+st.subheader("📊 Real-Time Leverage Allocation (Long vs Short)")
 c_as = list(liquidity_profiles.keys())
 fig_c = go.Figure()
-fig_c.add_trace(go.Bar(x=c_as, y=[liquidity_profiles[k]["longs"] for k in c_as], name="Long", marker_color="green"))
-fig_c.add_trace(go.Bar(x=c_as, y=[liquidity_profiles[k]["shorts"] for k in c_as], name="Short", marker_color="red"))
-fig_c.update_layout(height=280, barmode="group", template="plotly_dark", paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
+fig_c.add_trace(go.Bar(
+    x=c_as, 
+    y=[liquidity_profiles[k]["longs"] for k in c_as], 
+    name="Long %", 
+    marker_color="#00FF7F",
+    text=[f"{liquidity_profiles[k]['longs']:.1f}%" for k in c_as],
+    textposition="auto"
+))
+fig_c.add_trace(go.Bar(
+    x=c_as, 
+    y=[liquidity_profiles[k]["shorts"] for k in c_as], 
+    name="Short %", 
+    marker_color="#FF4500",
+    text=[f"{liquidity_profiles[k]['shorts']:.1f}%" for k in c_as],
+    textposition="auto"
+))
+fig_c.update_layout(height=320, barmode="group", template="plotly_dark", paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
+                    yaxis_title="Percentage (%)")
 st.plotly_chart(fig_c, use_container_width=True)
 
-# On-chain section
+# Show OI if available
+oi_rows = []
+for k in c_as:
+    oi = liquidity_profiles[k].get("oi")
+    if oi is not None:
+        oi_rows.append({"Ticker": k, "Open Interest (contracts)": f"{oi:,.0f}", "Source": liquidity_profiles[k]["source"]})
+if oi_rows:
+    st.markdown("#### Open Interest (Binance Futures)")
+    st.dataframe(pd.DataFrame(oi_rows), use_container_width=True, hide_index=True)
+
+# On-chain
 if show_onchain and onchain_profiles:
     st.subheader("🔗 Real On-chain Metrics")
     for ticker, metrics in onchain_profiles.items():
