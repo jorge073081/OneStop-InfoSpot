@@ -22,7 +22,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Dark theme CSS + Shiny Silver Comic Sans title
+# Dark theme CSS + Shiny Silver Comic Sans title (moved higher)
 st.markdown(
     """
     <style>
@@ -31,12 +31,17 @@ st.markdown(
         h1, h2, h3, h4, h5, h6, p, label, .stMarkdown { color: #fafafa !important; }
         [data-testid="stMetricValue"] { color: #00FF7F !important; }
 
+        /* Reduce top padding of the whole page */
+        .block-container {
+            padding-top: 1.2rem !important;
+        }
+
         .silver-title {
             font-family: 'Comic Sans MS', 'Comic Sans', cursive;
             font-size: 3.5rem;
             font-weight: bold;
             text-align: center;
-            margin: 0.3rem 0 0.9rem 0;
+            margin: -0.6rem 0 0.6rem 0;   /* moved higher */
             letter-spacing: 2px;
 
             /* Shiny Silver Effect */
@@ -86,7 +91,6 @@ def safe_float(value, default=0.0) -> float:
 
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Make sure we always have clean lowercase OHLC columns."""
     if df is None or df.empty:
         return df
     if isinstance(df.columns, pd.MultiIndex):
@@ -132,10 +136,8 @@ def compute_bollinger(
 
 
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """Add all standard indicators safely."""
     if df is None or df.empty or "close" not in df.columns:
         return df
-
     df = df.copy()
     df["sma50"] = df["close"].rolling(50).mean()
     df["sma200"] = df["close"].rolling(200).mean()
@@ -383,7 +385,6 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         "funding_rate": None,
     }
 
-    # Binance
     try:
         r = requests.get(
             f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol={symbol_binance}&period=1h&limit=1",
@@ -421,7 +422,6 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # Bybit
     try:
         r = requests.get(
             f"https://api.bybit.com/v5/market/account-ratio?category=linear&symbol={symbol_binance}&period=1h&limit=1",
@@ -465,7 +465,6 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # OKX
     try:
         r = requests.get(
             f"https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio?ccy={t}&period=1H",
@@ -700,7 +699,7 @@ st_autorefresh(interval=rf_rate * 1000, key="datarefresh")
 # 7. MAIN APP
 # ============================================================
 
-# ---- SHINY SILVER COMIC SANS TITLE ----
+# ---- SHINY SILVER COMIC SANS TITLE (moved higher) ----
 st.markdown('<div class="silver-title">OneStop-InfoSpot</div>', unsafe_allow_html=True)
 
 st.title("📈 Asset Intelligence Terminal")
