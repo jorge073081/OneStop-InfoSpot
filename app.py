@@ -12,6 +12,9 @@ import feedparser
 
 nltk.download('vader_lexicon', quiet=True)
 
+# Clear cache on startup (helps with old on-chain results)
+st.cache_data.clear()
+
 # -----------------------------
 # Dark Mode
 # -----------------------------
@@ -33,7 +36,7 @@ st.caption("Dark mode • Real BTC on-chain • RSI • MACD • Bollinger • V
 # Sidebar
 # -----------------------------
 st.sidebar.header("Controls")
-t_raw = st.sidebar.text_input("Enter Tickers (commas):", value="BTC-USD, AAPL")
+t_raw = st.sidebar.text_input("Enter Tickers (commas):", value="BTC-USD, ETH-USD, XRP-USD, ONDO-USD")
 tkrs = [t.strip().upper() for t in t_raw.split(",") if t.strip()]
 
 res_disp = st.sidebar.selectbox(
@@ -145,7 +148,6 @@ def load_ticker_data(tickers: tuple, interval: str, lookback: int, period: str, 
 
 @st.cache_data(ttl=300)
 def get_long_term_avg(ticker: str):
-    """1-year average price for long-term baseline"""
     try:
         hist = yf.Ticker(ticker).history(period="1y", interval="1d", auto_adjust=True)
         if hist.empty:
@@ -159,7 +161,6 @@ def get_long_term_avg(ticker: str):
 
 @st.cache_data(ttl=300)
 def get_daily_pivots(tickers: tuple):
-    """Classic pivots always calculated from the previous daily candle"""
     pivots = {}
     for t in tickers:
         try:
@@ -217,9 +218,11 @@ def get_crypto_news(max_items=12):
             continue
     return sorted(articles, key=lambda x: x["published"], reverse=True)[:max_items]
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=120)
 def get_real_onchain(ticker: str):
     t = ticker.upper().replace("-USD", "").replace("USDT", "").replace("USD", "").strip()
+    
+    result = {"Ticker": t}
     
     # ---------- 1. Bitcoin (best free data) ----------
     if t in ["BTC", "BITCOIN"]:
@@ -244,133 +247,127 @@ def get_real_onchain(ticker: str):
                 "Source": "Blockchain.com (live • free)"
             }
         except Exception as e:
-            return {"Error": str(e), "Source": "Blockchain.com"}
+            result["BTC Error"] = str(e)
 
-    # ---------- 2. DefiLlama (no key needed) ----------
+    # ---------- 2. DefiLlama Chains (no key) ----------
     try:
-        chains = requests.get("https://api.llama.fi/v2/chains", timeout=10).json()
+        chains = requests.get("https://api.llama.fi/v2/chains", timeout=12).json()
         
-        chain_aliases = {
-            "XRP": ["XRPL", "Ripple"],
-            "ETH": ["Ethereum"],
-            "SOL": ["Solana"],
-            "ADA": ["Cardano"],
-            "AVAX": ["Avalanche"],
-            "DOT": ["Polkadot"],
-            "MATIC": ["Polygon"],
-            "POL": ["Polygon"],
-            "ATOM": ["Cosmos", "CosmosHub"],
-            "NEAR": ["Near"],
-            "FTM": ["Fantom"],
-            "ALGO": ["Algorand"],
-            "ICP": ["Internet Computer"],
-            "FIL": ["Filecoin"],
-            "LTC": ["Litecoin"],
-            "BCH": ["Bitcoincash", "Bitcoin Cash"],
-            "SUI": ["Sui"],
-            "APT": ["Aptos"],
-            "SEI": ["Sei"],
-            "TIA": ["Celestia"],
-            "DOGE": ["Doge", "Dogecoin"],
-            "BNB": ["BSC", "Binance"],
-            "ARB": ["Arbitrum"],
-            "OP": ["OP Mainnet", "Optimism"],
-        }
-        
-        search_names = chain_aliases.get(t, [t])
-        matched_chain = None
+        matched = None
         for c in chains:
-            name = c.get("name", "").lower()
+            name = (c.get("name") or "").lower()
             symbol = (c.get("tokenSymbol") or "").upper()
-            if symbol == t or any(alias.lower() in name for alias in search_names):
-                matched_chain = c
+            
+            if symbol == t:
+                matched = c
+                break
+            if t == "XRP" and "xrpl" in name:
+                matched = c
+                break
+            if t == "ETH" and name == "ethereum":
+                matched = c
+                break
+            if t == "SOL" and name == "solana":
+                matched = c
+                break
+            if t in name or name in t.lower():
+                matched = c
                 break
         
-        if matched_chain:
+        if matched:
             return {
-                "Network / Chain": matched_chain.get("name"),
-                "TVL": f"${matched_chain.get('tvl', 0):,.0f}",
-                "Token Symbol": matched_chain.get("tokenSymbol") or t,
-                "Source": "DefiLlama Chains (free • no key)"
+                "Network / Chain": matched.get("name"),
+                "TVL": f"${matched.get('tvl', 0):,.0f}",
+                "Token Symbol": matched.get("tokenSymbol") or t,
+                "Source": "DefiLlama (free • no key)"
             }
-    except Exception:
-        pass
+    except Exception as e:
+        result["DefiLlama Chain Error"] = str(e)[:80]
 
-    # ---------- 3. Protocol lookup (ONDO, etc.) ----------
+    # ---------- 3. DefiLlama Protocol (ONDO etc.) ----------
     try:
-        protocol_slugs = {
+        slug_map = {
             "ONDO": "ondo-finance",
             "AAVE": "aave",
             "UNI": "uniswap",
             "LINK": "chainlink",
+            "LDO": "lido",
             "MKR": "makerdao",
             "CRV": "curve-dex",
-            "LDO": "lido",
             "PENDLE": "pendle",
             "JUP": "jupiter-exchange-solana",
-            "RAY": "raydium",
-            "ORCA": "orca",
             "INJ": "injective-protocol",
         }
+        slug = slug_map.get(t, t.lower().replace(" ", "-"))
         
-        slug = protocol_slugs.get(t, t.lower().replace(" ", "-"))
-        
-        tvl_resp = requests.get(f"https://api.llama.fi/tvl/{slug}", timeout=8)
-        if tvl_resp.status_code == 200:
-            tvl_val = tvl_resp.json()
-            if isinstance(tvl_val, (int, float)) and tvl_val > 0:
+        r = requests.get(f"https://api.llama.fi/tvl/{slug}", timeout=8)
+        if r.status_code == 200:
+            val = r.json()
+            if isinstance(val, (int, float)) and val > 0:
                 return {
                     "Protocol": t,
-                    "TVL": f"${tvl_val:,.0f}",
+                    "TVL": f"${val:,.0f}",
                     "Source": "DefiLlama Protocol (free)"
                 }
         
-        proto = requests.get(f"https://api.llama.fi/protocol/{slug}", timeout=8)
-        if proto.status_code == 200:
-            data = proto.json()
-            tvl = data.get("tvl")
-            if isinstance(tvl, list) and tvl:
-                tvl = tvl[-1].get("totalLiquidityUSD", 0) if isinstance(tvl[-1], dict) else 0
-            elif not isinstance(tvl, (int, float)):
-                tvl = data.get("currentChainTvls", {})
-                tvl = sum(tvl.values()) if isinstance(tvl, dict) else 0
+        r2 = requests.get(f"https://api.llama.fi/protocol/{slug}", timeout=8)
+        if r2.status_code == 200:
+            data = r2.json()
+            tvl = 0
+            if isinstance(data.get("tvl"), list) and data["tvl"]:
+                last = data["tvl"][-1]
+                tvl = last.get("totalLiquidityUSD", 0) if isinstance(last, dict) else 0
+            elif isinstance(data.get("tvl"), (int, float)):
+                tvl = data["tvl"]
             
-            result = {
+            res = {
                 "Protocol": data.get("name", t),
                 "Category": data.get("category", "N/A"),
                 "Symbol": data.get("symbol", t),
                 "Source": "DefiLlama Protocol (free)"
             }
-            if tvl and tvl > 0:
-                result["TVL"] = f"${tvl:,.0f}"
+            if tvl > 0:
+                res["TVL"] = f"${tvl:,.0f}"
             if data.get("mcap"):
-                result["Market Cap"] = f"${data['mcap']:,.0f}"
-            return result
-    except Exception:
-        pass
+                res["Market Cap"] = f"${data['mcap']:,.0f}"
+            return res
+    except Exception as e:
+        result["DefiLlama Protocol Error"] = str(e)[:80]
 
-    # ---------- 4. XRP special free endpoints ----------
-    if t == "XRP":
-        try:
-            stats = requests.get("https://api.xrpl.to/v1/stats", timeout=8).json()
-            h24 = stats.get("H24", {})
-            return {
-                "Network": "XRP Ledger (XRPL)",
-                "24h Transactions": f"{h24.get('transactions24H', 'N/A'):,}" if isinstance(h24.get('transactions24H'), int) else "N/A",
-                "Unique Traders (24h)": f"{h24.get('uniqueTraders24H', 'N/A'):,}" if isinstance(h24.get('uniqueTraders24H'), int) else "N/A",
-                "Tokens Traded (24h)": h24.get("tradedTokens24H", "N/A"),
-                "Source": "XRPL.to + DefiLlama (free)"
-            }
-        except Exception:
-            pass
+    # ---------- 4. CoinGecko keyless fallback ----------
+    try:
+        cg_ids = {
+            "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "XRP": "ripple",
+            "ADA": "cardano", "AVAX": "avalanche-2", "DOT": "polkadot", "DOGE": "dogecoin",
+            "LINK": "chainlink", "ONDO": "ondo-finance", "MATIC": "matic-network",
+            "POL": "polygon-ecosystem-token", "NEAR": "near", "ATOM": "cosmos",
+            "SUI": "sui", "APT": "aptos", "SEI": "sei-network", "TIA": "celestia"
+        }
+        cg_id = cg_ids.get(t, t.lower())
+        
+        r = requests.get(
+            f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies=usd&include_market_cap=true&include_24hr_vol=true",
+            timeout=8
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if cg_id in data:
+                d = data[cg_id]
+                return {
+                    "Asset": t,
+                    "Price (USD)": f"${d.get('usd', 0):,.4f}",
+                    "Market Cap": f"${d.get('usd_market_cap', 0):,.0f}" if d.get('usd_market_cap') else "N/A",
+                    "24h Volume": f"${d.get('usd_24h_vol', 0):,.0f}" if d.get('usd_24h_vol') else "N/A",
+                    "Source": "CoinGecko (keyless free tier)"
+                }
+    except Exception as e:
+        result["CoinGecko Error"] = str(e)[:80]
 
     # ---------- Final fallback ----------
-    return {
-        "Note": f"Limited free on-chain data available for {ticker}",
-        "Status": "BTC = full stats • Major L1s & many protocols = DefiLlama TVL",
-        "Tip": "Deep metrics (active addresses, fees, holders) usually need a paid key (Glassnode, CryptoQuant, Dune, etc.)",
-        "Source": "Free endpoints only"
-    }
+    result["Note"] = "Could not fetch live free on-chain data right now"
+    result["Tip"] = "Try refreshing or check your internet connection"
+    result["Source"] = "All free endpoints attempted"
+    return result
 
 # -----------------------------
 # Load Data
@@ -386,10 +383,8 @@ if not data:
     st.error("No valid data loaded.")
     st.stop()
 
-# Get correct daily pivots once
 daily_pivots = get_daily_pivots(tuple(tkrs))
 
-# Pre-fetch BTC data for relative strength if needed
 btc_data = None
 if show_vs_btc and "BTC-USD" not in data:
     try:
@@ -435,7 +430,6 @@ for t, hist in data.items():
         if "-USD" in t or t.replace("-", "").isalpha():
             onchain_profiles[t] = get_real_onchain(t)
 
-    # Correct Daily Pivots
     if t in daily_pivots:
         p = daily_pivots[t]
         matrix_rows.append({
@@ -481,7 +475,6 @@ m_tgt = st.selectbox("Select Target Asset:", list(liquidity_profiles.keys()))
 if m_tgt:
     h_data = chart_historical_store[m_tgt].copy()
 
-    # Calculate overlays
     if show_baseline:
         h_data["baseline"] = h_data["close"].mean()
 
@@ -493,7 +486,6 @@ if m_tgt:
     if show_vwap and "volume" in h_data.columns:
         h_data["vwap"] = (h_data["close"] * h_data["volume"]).cumsum() / h_data["volume"].cumsum()
 
-    # Relative strength vs BTC
     if show_vs_btc and btc_data is not None:
         common_idx = h_data.index.intersection(btc_data.index)
         if len(common_idx) > 5:
@@ -525,7 +517,6 @@ if m_tgt:
 
     current_row = 1
 
-    # Price + BB + SMAs + Baselines + VWAP
     fig.add_trace(go.Scatter(x=h_data.index, y=h_data["close"], name="Price",
                              line=dict(color="#00FFFF", width=2)), row=current_row, col=1)
 
@@ -568,7 +559,6 @@ if m_tgt:
 
     current_row += 1
 
-    # RSI
     if show_rsi:
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["rsi"], name="RSI",
                                  line=dict(color="#FFD700", width=1.5)), row=current_row, col=1)
@@ -578,7 +568,6 @@ if m_tgt:
         fig.update_yaxes(range=[0, 100], row=current_row, col=1)
         current_row += 1
 
-    # MACD
     if show_macd:
         colors = ["#00FF7F" if v >= 0 else "#FF4500" for v in h_data["macd_hist"]]
         fig.add_trace(go.Bar(x=h_data.index, y=h_data["macd_hist"], name="Histogram",
@@ -589,7 +578,6 @@ if m_tgt:
                                  line=dict(color="#FF69B4", width=1.5)), row=current_row, col=1)
         current_row += 1
 
-    # Volume Profile
     if show_vol_profile and "volume" in h_data.columns:
         price_bins = pd.cut(h_data["close"], bins=24)
         vol_profile = h_data.groupby(price_bins, observed=True)["volume"].sum()
@@ -605,7 +593,6 @@ if m_tgt:
         ), row=current_row, col=1)
         current_row += 1
 
-    # Relative Strength vs BTC
     if show_vs_btc and "vs_btc" in h_data.columns:
         fig.add_trace(go.Scatter(
             x=h_data.index, y=h_data["vs_btc"],
@@ -624,7 +611,6 @@ if m_tgt:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # Quick metrics
     cols = st.columns(5)
     if show_rsi and not h_data["rsi"].isna().all():
         rsi_val = h_data["rsi"].iloc[-1]
@@ -644,7 +630,6 @@ if m_tgt:
     if show_vs_btc and "vs_btc" in h_data.columns:
         cols[4].metric("vs BTC", f"{h_data['vs_btc'].iloc[-1]:+.1f}%")
 
-    # Liquidity map
     st.markdown("#### 🔥 Simulated Liquidity Map")
     st.caption("⚠️ Illustrative only")
     p = liquidity_profiles[m_tgt]
@@ -704,5 +689,3 @@ with col2:
     st.subheader("📊 Sentiment")
     fng_v, fng_c = get_fear_greed()
     st.metric("Fear & Greed", f"{fng_v}/100", fng_c)
-
-st.sidebar.success(f"Last refresh: {pd.Timestamp.now().strftime('%H:%M:%S')}")
