@@ -12,12 +12,15 @@ import feedparser
 
 nltk.download('vader_lexicon', quiet=True)
 
-# Clear cache on startup (helps with old on-chain results)
+# Clear cache every time the app starts
 st.cache_data.clear()
 
-# -----------------------------
-# Dark Mode
-# -----------------------------
+# Common headers that work better on Streamlit Cloud
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json"
+}
+
 st.set_page_config(page_title="Terminal", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
@@ -30,7 +33,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("📈 Asset Intelligence Terminal")
-st.caption("Dark mode • Real BTC on-chain • RSI • MACD • Bollinger • Volume Profile • Correct Daily Pivots • Baselines • VWAP • Free On-chain")
+st.caption("Dark mode • Real BTC on-chain • RSI • MACD • Bollinger • Volume Profile • Correct Daily Pivots • Baselines • VWAP")
 
 # -----------------------------
 # Sidebar
@@ -39,10 +42,7 @@ st.sidebar.header("Controls")
 t_raw = st.sidebar.text_input("Enter Tickers (commas):", value="BTC-USD, ETH-USD, XRP-USD, ONDO-USD")
 tkrs = [t.strip().upper() for t in t_raw.split(",") if t.strip()]
 
-res_disp = st.sidebar.selectbox(
-    "Resolution",
-    ["15min", "1hr", "6hr", "Daily (1d)", "Weekly (1w)"]
-)
+res_disp = st.sidebar.selectbox("Resolution", ["15min", "1hr", "6hr", "Daily (1d)", "Weekly (1w)"])
 rf_rate = st.sidebar.slider("Refresh Rate (Seconds)", 15, 120, 45)
 
 st.sidebar.subheader("Indicators")
@@ -60,7 +60,6 @@ show_vwap = st.sidebar.checkbox("VWAP", value=False)
 show_vs_btc = st.sidebar.checkbox("Relative Strength vs BTC", value=False)
 show_onchain = st.sidebar.checkbox("Show On-chain Metrics", value=True)
 
-# Resolution mapping
 if res_disp == "15min":
     interval, lookback_bars, period = "15m", 96, "7d"
 elif res_disp == "1hr":
@@ -74,9 +73,6 @@ else:
 
 st_autorefresh(interval=rf_rate * 1000, key="datarefresh")
 
-# -----------------------------
-# Indicator Helpers
-# -----------------------------
 def compute_rsi(series, period=14):
     delta = series.diff()
     gain = delta.where(delta > 0, 0.0)
@@ -101,13 +97,10 @@ def compute_bollinger(series, window=20, num_std=2):
     lower = sma - (std * num_std)
     return sma, upper, lower
 
-# -----------------------------
-# Data Loaders
-# -----------------------------
 @st.cache_data(ttl=300)
 def get_fear_greed():
     try:
-        res = requests.get("https://api.alternative.me/fng/", timeout=5).json()
+        res = requests.get("https://api.alternative.me/fng/", headers=HEADERS, timeout=8).json()
         data = res["data"][0]
         return data["value"], data["value_classification"]
     except Exception:
@@ -121,25 +114,20 @@ def load_ticker_data(tickers: tuple, interval: str, lookback: int, period: str, 
             hist = yf.Ticker(t).history(period=period, interval=interval, auto_adjust=True)
             if hist.empty:
                 continue
-
             if isinstance(hist.columns, pd.MultiIndex):
                 hist.columns = hist.columns.get_level_values(0)
-
             hist.columns = [str(c).lower() for c in hist.columns]
             hist.index = hist.index.tz_localize(None)
-
             if is_6h:
                 hist = hist.resample("6h").agg({
                     "open": "first", "high": "max", "low": "min",
                     "close": "last", "volume": "sum"
                 }).dropna()
-
             hist["sma50"] = hist["close"].rolling(50).mean()
             hist["sma200"] = hist["close"].rolling(200).mean()
             hist["rsi"] = compute_rsi(hist["close"])
             hist["macd"], hist["macd_signal"], hist["macd_hist"] = compute_macd(hist["close"])
             hist["bb_mid"], hist["bb_upper"], hist["bb_lower"] = compute_bollinger(hist["close"])
-
             display = hist.iloc[-lookback:] if len(hist) >= lookback else hist
             results[t] = display
         except Exception as e:
@@ -170,23 +158,16 @@ def get_daily_pivots(tickers: tuple):
             if isinstance(daily.columns, pd.MultiIndex):
                 daily.columns = daily.columns.get_level_values(0)
             daily.columns = [str(c).lower() for c in daily.columns]
-
             prev = daily.iloc[-2]
             high = float(prev["high"])
             low = float(prev["low"])
             close = float(prev["close"])
-
             pivot = (high + low + close) / 3
             r1 = (2 * pivot) - low
             s1 = (2 * pivot) - high
             r2 = pivot + (high - low)
             s2 = pivot - (high - low)
-
-            pivots[t] = {
-                "Pivot": pivot,
-                "R1": r1, "R2": r2,
-                "S1": s1, "S2": s2
-            }
+            pivots[t] = {"Pivot": pivot, "R1": r1, "R2": r2, "S1": s1, "S2": s2}
         except Exception:
             continue
     return pivots
@@ -218,19 +199,17 @@ def get_crypto_news(max_items=12):
             continue
     return sorted(articles, key=lambda x: x["published"], reverse=True)[:max_items]
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=90)
 def get_real_onchain(ticker: str):
     t = ticker.upper().replace("-USD", "").replace("USDT", "").replace("USD", "").strip()
     
-    result = {"Ticker": t}
-    
-    # ---------- 1. Bitcoin (best free data) ----------
+    # 1. Bitcoin
     if t in ["BTC", "BITCOIN"]:
         try:
-            stats = requests.get("https://api.blockchain.info/stats", timeout=8).json()
+            stats = requests.get("https://api.blockchain.info/stats", headers=HEADERS, timeout=10).json()
             addr_resp = requests.get(
                 "https://api.blockchain.info/charts/n-unique-addresses?timespan=5days&format=json",
-                timeout=8
+                headers=HEADERS, timeout=10
             ).json()
             latest_addr = int(addr_resp["values"][-1]["y"]) if addr_resp.get("values") else "N/A"
             hash_rate_ehs = stats.get("hash_rate", 0) / 1e9
@@ -244,33 +223,24 @@ def get_real_onchain(ticker: str):
                 "Unique Addresses (latest)": f"{latest_addr:,}" if isinstance(latest_addr, int) else latest_addr,
                 "Est. Tx Volume (USD)": f"${stats.get('estimated_transaction_volume_usd', 0):,.0f}",
                 "Total BTC in Circulation": f"{stats.get('totalbc', 0) / 1e8:,.0f}",
-                "Source": "Blockchain.com (live • free)"
+                "Source": "Blockchain.com (free)"
             }
         except Exception as e:
-            result["BTC Error"] = str(e)
+            return {"Error": f"BTC failed: {str(e)[:100]}"}
 
-    # ---------- 2. DefiLlama Chains (no key) ----------
+    # 2. DefiLlama Chains
     try:
-        chains = requests.get("https://api.llama.fi/v2/chains", timeout=12).json()
+        r = requests.get("https://api.llama.fi/v2/chains", headers=HEADERS, timeout=12)
+        chains = r.json()
         
         matched = None
         for c in chains:
             name = (c.get("name") or "").lower()
             symbol = (c.get("tokenSymbol") or "").upper()
-            
-            if symbol == t:
+            if symbol == t or (t == "XRP" and "xrpl" in name) or (t == "ETH" and name == "ethereum") or (t == "SOL" and name == "solana"):
                 matched = c
                 break
-            if t == "XRP" and "xrpl" in name:
-                matched = c
-                break
-            if t == "ETH" and name == "ethereum":
-                matched = c
-                break
-            if t == "SOL" and name == "solana":
-                matched = c
-                break
-            if t in name or name in t.lower():
+            if t.lower() in name:
                 matched = c
                 break
         
@@ -279,76 +249,50 @@ def get_real_onchain(ticker: str):
                 "Network / Chain": matched.get("name"),
                 "TVL": f"${matched.get('tvl', 0):,.0f}",
                 "Token Symbol": matched.get("tokenSymbol") or t,
-                "Source": "DefiLlama (free • no key)"
+                "Source": "DefiLlama (free)"
             }
     except Exception as e:
-        result["DefiLlama Chain Error"] = str(e)[:80]
+        pass
 
-    # ---------- 3. DefiLlama Protocol (ONDO etc.) ----------
+    # 3. DefiLlama Protocol
     try:
         slug_map = {
-            "ONDO": "ondo-finance",
-            "AAVE": "aave",
-            "UNI": "uniswap",
-            "LINK": "chainlink",
-            "LDO": "lido",
-            "MKR": "makerdao",
-            "CRV": "curve-dex",
-            "PENDLE": "pendle",
-            "JUP": "jupiter-exchange-solana",
-            "INJ": "injective-protocol",
+            "ONDO": "ondo-finance", "AAVE": "aave", "UNI": "uniswap", "LINK": "chainlink",
+            "LDO": "lido", "MKR": "makerdao", "CRV": "curve-dex", "PENDLE": "pendle",
+            "JUP": "jupiter-exchange-solana", "INJ": "injective-protocol"
         }
-        slug = slug_map.get(t, t.lower().replace(" ", "-"))
+        slug = slug_map.get(t, t.lower())
         
-        r = requests.get(f"https://api.llama.fi/tvl/{slug}", timeout=8)
+        r = requests.get(f"https://api.llama.fi/tvl/{slug}", headers=HEADERS, timeout=10)
         if r.status_code == 200:
             val = r.json()
             if isinstance(val, (int, float)) and val > 0:
-                return {
-                    "Protocol": t,
-                    "TVL": f"${val:,.0f}",
-                    "Source": "DefiLlama Protocol (free)"
-                }
+                return {"Protocol": t, "TVL": f"${val:,.0f}", "Source": "DefiLlama Protocol (free)"}
         
-        r2 = requests.get(f"https://api.llama.fi/protocol/{slug}", timeout=8)
+        r2 = requests.get(f"https://api.llama.fi/protocol/{slug}", headers=HEADERS, timeout=10)
         if r2.status_code == 200:
             data = r2.json()
-            tvl = 0
-            if isinstance(data.get("tvl"), list) and data["tvl"]:
-                last = data["tvl"][-1]
-                tvl = last.get("totalLiquidityUSD", 0) if isinstance(last, dict) else 0
-            elif isinstance(data.get("tvl"), (int, float)):
-                tvl = data["tvl"]
-            
-            res = {
+            return {
                 "Protocol": data.get("name", t),
                 "Category": data.get("category", "N/A"),
                 "Symbol": data.get("symbol", t),
+                "Market Cap": f"${data.get('mcap', 0):,.0f}" if data.get("mcap") else "N/A",
                 "Source": "DefiLlama Protocol (free)"
             }
-            if tvl > 0:
-                res["TVL"] = f"${tvl:,.0f}"
-            if data.get("mcap"):
-                res["Market Cap"] = f"${data['mcap']:,.0f}"
-            return res
-    except Exception as e:
-        result["DefiLlama Protocol Error"] = str(e)[:80]
+    except Exception:
+        pass
 
-    # ---------- 4. CoinGecko keyless fallback ----------
+    # 4. CoinGecko keyless
     try:
         cg_ids = {
             "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "XRP": "ripple",
             "ADA": "cardano", "AVAX": "avalanche-2", "DOT": "polkadot", "DOGE": "dogecoin",
-            "LINK": "chainlink", "ONDO": "ondo-finance", "MATIC": "matic-network",
-            "POL": "polygon-ecosystem-token", "NEAR": "near", "ATOM": "cosmos",
+            "LINK": "chainlink", "ONDO": "ondo-finance", "NEAR": "near", "ATOM": "cosmos",
             "SUI": "sui", "APT": "aptos", "SEI": "sei-network", "TIA": "celestia"
         }
         cg_id = cg_ids.get(t, t.lower())
-        
-        r = requests.get(
-            f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies=usd&include_market_cap=true&include_24hr_vol=true",
-            timeout=8
-        )
+        url = f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies=usd&include_market_cap=true&include_24hr_vol=true"
+        r = requests.get(url, headers=HEADERS, timeout=10)
         if r.status_code == 200:
             data = r.json()
             if cg_id in data:
@@ -356,18 +300,18 @@ def get_real_onchain(ticker: str):
                 return {
                     "Asset": t,
                     "Price (USD)": f"${d.get('usd', 0):,.4f}",
-                    "Market Cap": f"${d.get('usd_market_cap', 0):,.0f}" if d.get('usd_market_cap') else "N/A",
-                    "24h Volume": f"${d.get('usd_24h_vol', 0):,.0f}" if d.get('usd_24h_vol') else "N/A",
-                    "Source": "CoinGecko (keyless free tier)"
+                    "Market Cap": f"${d.get('usd_market_cap', 0):,.0f}" if d.get("usd_market_cap") else "N/A",
+                    "24h Volume": f"${d.get('usd_24h_vol', 0):,.0f}" if d.get("usd_24h_vol") else "N/A",
+                    "Source": "CoinGecko (keyless free)"
                 }
     except Exception as e:
-        result["CoinGecko Error"] = str(e)[:80]
+        return {"Error": f"All free sources failed for {t}", "Details": str(e)[:120]}
 
-    # ---------- Final fallback ----------
-    result["Note"] = "Could not fetch live free on-chain data right now"
-    result["Tip"] = "Try refreshing or check your internet connection"
-    result["Source"] = "All free endpoints attempted"
-    return result
+    return {
+        "Note": f"No free on-chain data found for {t}",
+        "Tip": "BTC works best. Others use DefiLlama + CoinGecko free tiers.",
+        "Source": "Free endpoints only"
+    }
 
 # -----------------------------
 # Load Data
@@ -386,18 +330,16 @@ if not data:
 daily_pivots = get_daily_pivots(tuple(tkrs))
 
 btc_data = None
-if show_vs_btc and "BTC-USD" not in data:
-    try:
-        btc_raw = load_ticker_data(("BTC-USD",), interval, lookback_bars, period, is_6h)
-        btc_data = btc_raw.get("BTC-USD")
-    except Exception:
-        btc_data = None
-elif show_vs_btc and "BTC-USD" in data:
-    btc_data = data["BTC-USD"]
+if show_vs_btc:
+    if "BTC-USD" in data:
+        btc_data = data["BTC-USD"]
+    else:
+        try:
+            btc_raw = load_ticker_data(("BTC-USD",), interval, lookback_bars, period, is_6h)
+            btc_data = btc_raw.get("BTC-USD")
+        except Exception:
+            pass
 
-# -----------------------------
-# Derived Metrics
-# -----------------------------
 combined_df = pd.DataFrame()
 matrix_rows = []
 liquidity_profiles = {}
@@ -426,47 +368,30 @@ for t, hist in data.items():
         "longs": long_r, "shorts": short_r
     }
 
-    if show_onchain:
-        if "-USD" in t or t.replace("-", "").isalpha():
-            onchain_profiles[t] = get_real_onchain(t)
+    if show_onchain and ("-USD" in t or t.replace("-", "").isalpha()):
+        onchain_profiles[t] = get_real_onchain(t)
 
     if t in daily_pivots:
         p = daily_pivots[t]
         matrix_rows.append({
-            "Ticker": t,
-            "Price": f"${c_px:,.2f}",
-            "Change": f"{delta:+.2f}%",
-            "Long %": f"{long_r:.1f}%",
-            "Short %": f"{short_r:.1f}%",
-            "Pivot": f"${p['Pivot']:,.2f}",
-            "S1": f"${p['S1']:,.2f}",
-            "S2": f"${p['S2']:,.2f}",
-            "R1": f"${p['R1']:,.2f}",
-            "R2": f"${p['R2']:,.2f}",
+            "Ticker": t, "Price": f"${c_px:,.2f}", "Change": f"{delta:+.2f}%",
+            "Long %": f"{long_r:.1f}%", "Short %": f"{short_r:.1f}%",
+            "Pivot": f"${p['Pivot']:,.2f}", "S1": f"${p['S1']:,.2f}", "S2": f"${p['S2']:,.2f}",
+            "R1": f"${p['R1']:,.2f}", "R2": f"${p['R2']:,.2f}"
         })
     else:
         matrix_rows.append({
-            "Ticker": t,
-            "Price": f"${c_px:,.2f}",
-            "Change": f"{delta:+.2f}%",
-            "Long %": f"{long_r:.1f}%",
-            "Short %": f"{short_r:.1f}%",
-            "Pivot": "N/A",
-            "S1": "N/A",
-            "S2": "N/A",
-            "R1": "N/A",
-            "R2": "N/A",
+            "Ticker": t, "Price": f"${c_px:,.2f}", "Change": f"{delta:+.2f}%",
+            "Long %": f"{long_r:.1f}%", "Short %": f"{short_r:.1f}%",
+            "Pivot": "N/A", "S1": "N/A", "S2": "N/A", "R1": "N/A", "R2": "N/A"
         })
 
-# -----------------------------
 # Charts
-# -----------------------------
 st.subheader("📊 Comparative Relative Performance")
 fig = go.Figure()
 for col in combined_df.columns:
     fig.add_trace(go.Scatter(x=combined_df.index, y=combined_df[col], name=col))
-fig.update_layout(height=320, template="plotly_dark", paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
-                  margin=dict(l=10, r=10, t=30, b=10))
+fig.update_layout(height=320, template="plotly_dark", paper_bgcolor="#0e1117", plot_bgcolor="#0e1117", margin=dict(l=10, r=10, t=30, b=10))
 st.plotly_chart(fig, use_container_width=True)
 
 st.subheader("🔥 Asset Analysis Frameworks")
@@ -477,15 +402,12 @@ if m_tgt:
 
     if show_baseline:
         h_data["baseline"] = h_data["close"].mean()
-
     if show_long_baseline:
         long_avg = get_long_term_avg(m_tgt)
         if long_avg is not None:
             h_data["long_baseline"] = long_avg
-
     if show_vwap and "volume" in h_data.columns:
         h_data["vwap"] = (h_data["close"] * h_data["volume"]).cumsum() / h_data["volume"].cumsum()
-
     if show_vs_btc and btc_data is not None:
         common_idx = h_data.index.intersection(btc_data.index)
         if len(common_idx) > 5:
@@ -500,68 +422,37 @@ if m_tgt:
     if show_vs_btc and "vs_btc" in h_data.columns: rows += 1
 
     row_heights = [0.50] + [0.125] * (rows - 1) if rows > 1 else [1.0]
-
     subplot_titles = ["Price"]
     if show_rsi: subplot_titles.append("RSI (14)")
     if show_macd: subplot_titles.append("MACD")
     if show_vol_profile: subplot_titles.append("Volume Profile")
     if show_vs_btc and "vs_btc" in h_data.columns: subplot_titles.append("vs BTC (%)")
 
-    fig = make_subplots(
-        rows=rows, cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.02,
-        row_heights=row_heights,
-        subplot_titles=subplot_titles
-    )
-
+    fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.02, row_heights=row_heights, subplot_titles=subplot_titles)
     current_row = 1
 
-    fig.add_trace(go.Scatter(x=h_data.index, y=h_data["close"], name="Price",
-                             line=dict(color="#00FFFF", width=2)), row=current_row, col=1)
+    fig.add_trace(go.Scatter(x=h_data.index, y=h_data["close"], name="Price", line=dict(color="#00FFFF", width=2)), row=current_row, col=1)
 
     if show_bb:
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["bb_upper"], name="BB Upper",
-                                 line=dict(color="rgba(255,255,255,0.3)", width=1), showlegend=False), row=current_row, col=1)
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["bb_lower"], name="BB Lower",
-                                 line=dict(color="rgba(255,255,255,0.3)", width=1),
-                                 fill="tonexty", fillcolor="rgba(0,255,127,0.08)"), row=current_row, col=1)
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["bb_mid"], name="BB Mid",
-                                 line=dict(color="rgba(255,255,255,0.5)", width=1, dash="dot")), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["bb_upper"], name="BB Upper", line=dict(color="rgba(255,255,255,0.3)", width=1), showlegend=False), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["bb_lower"], name="BB Lower", line=dict(color="rgba(255,255,255,0.3)", width=1), fill="tonexty", fillcolor="rgba(0,255,127,0.08)"), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["bb_mid"], name="BB Mid", line=dict(color="rgba(255,255,255,0.5)", width=1, dash="dot")), row=current_row, col=1)
 
     if show_sma50:
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["sma50"], name="SMA 50",
-                                 line=dict(color="#00FF7F", width=1.5, dash="dash")), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["sma50"], name="SMA 50", line=dict(color="#00FF7F", width=1.5, dash="dash")), row=current_row, col=1)
     if show_sma200:
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["sma200"], name="SMA 200",
-                                 line=dict(color="#FF4500", width=1.5)), row=current_row, col=1)
-
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["sma200"], name="SMA 200", line=dict(color="#FF4500", width=1.5)), row=current_row, col=1)
     if show_baseline and "baseline" in h_data.columns:
-        fig.add_trace(go.Scatter(
-            x=h_data.index, y=h_data["baseline"],
-            name="Hist. Baseline (Avg)",
-            line=dict(color="#FFD700", width=1.8, dash="dot")
-        ), row=current_row, col=1)
-
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["baseline"], name="Hist. Baseline (Avg)", line=dict(color="#FFD700", width=1.8, dash="dot")), row=current_row, col=1)
     if show_long_baseline and "long_baseline" in h_data.columns:
-        fig.add_trace(go.Scatter(
-            x=h_data.index, y=h_data["long_baseline"],
-            name="1Y Baseline",
-            line=dict(color="#FF8C00", width=1.8, dash="dashdot")
-        ), row=current_row, col=1)
-
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["long_baseline"], name="1Y Baseline", line=dict(color="#FF8C00", width=1.8, dash="dashdot")), row=current_row, col=1)
     if show_vwap and "vwap" in h_data.columns:
-        fig.add_trace(go.Scatter(
-            x=h_data.index, y=h_data["vwap"],
-            name="VWAP",
-            line=dict(color="#FF00FF", width=1.6)
-        ), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["vwap"], name="VWAP", line=dict(color="#FF00FF", width=1.6)), row=current_row, col=1)
 
     current_row += 1
 
     if show_rsi:
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["rsi"], name="RSI",
-                                 line=dict(color="#FFD700", width=1.5)), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["rsi"], name="RSI", line=dict(color="#FFD700", width=1.5)), row=current_row, col=1)
         fig.add_hline(y=70, line_dash="dash", line_color="red", row=current_row, col=1)
         fig.add_hline(y=30, line_dash="dash", line_color="lime", row=current_row, col=1)
         fig.add_hline(y=50, line_dash="dot", line_color="gray", row=current_row, col=1)
@@ -570,55 +461,31 @@ if m_tgt:
 
     if show_macd:
         colors = ["#00FF7F" if v >= 0 else "#FF4500" for v in h_data["macd_hist"]]
-        fig.add_trace(go.Bar(x=h_data.index, y=h_data["macd_hist"], name="Histogram",
-                             marker_color=colors, showlegend=False), row=current_row, col=1)
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["macd"], name="MACD",
-                                 line=dict(color="#00BFFF", width=1.5)), row=current_row, col=1)
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["macd_signal"], name="Signal",
-                                 line=dict(color="#FF69B4", width=1.5)), row=current_row, col=1)
+        fig.add_trace(go.Bar(x=h_data.index, y=h_data["macd_hist"], name="Histogram", marker_color=colors, showlegend=False), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["macd"], name="MACD", line=dict(color="#00BFFF", width=1.5)), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["macd_signal"], name="Signal", line=dict(color="#FF69B4", width=1.5)), row=current_row, col=1)
         current_row += 1
 
     if show_vol_profile and "volume" in h_data.columns:
         price_bins = pd.cut(h_data["close"], bins=24)
         vol_profile = h_data.groupby(price_bins, observed=True)["volume"].sum()
         bin_centers = [interval.mid for interval in vol_profile.index]
-
-        fig.add_trace(go.Bar(
-            x=vol_profile.values,
-            y=bin_centers,
-            orientation="h",
-            name="Vol Profile",
-            marker_color="rgba(0, 191, 255, 0.45)",
-            showlegend=False
-        ), row=current_row, col=1)
+        fig.add_trace(go.Bar(x=vol_profile.values, y=bin_centers, orientation="h", name="Vol Profile", marker_color="rgba(0, 191, 255, 0.45)", showlegend=False), row=current_row, col=1)
         current_row += 1
 
     if show_vs_btc and "vs_btc" in h_data.columns:
-        fig.add_trace(go.Scatter(
-            x=h_data.index, y=h_data["vs_btc"],
-            name="vs BTC %",
-            line=dict(color="#00FFAA", width=1.8)
-        ), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["vs_btc"], name="vs BTC %", line=dict(color="#00FFAA", width=1.8)), row=current_row, col=1)
         fig.add_hline(y=0, line_dash="dash", line_color="gray", row=current_row, col=1)
 
-    fig.update_layout(
-        height=220 + (rows * 150),
-        template="plotly_dark",
-        paper_bgcolor="#0e1117",
-        plot_bgcolor="#0e1117",
-        margin=dict(l=10, r=10, t=40, b=10),
-        legend=dict(orientation="h", y=1.02)
-    )
+    fig.update_layout(height=220 + (rows * 150), template="plotly_dark", paper_bgcolor="#0e1117", plot_bgcolor="#0e1117", margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h", y=1.02))
     st.plotly_chart(fig, use_container_width=True)
 
     cols = st.columns(5)
     if show_rsi and not h_data["rsi"].isna().all():
         rsi_val = h_data["rsi"].iloc[-1]
-        cols[0].metric("RSI", f"{rsi_val:.1f}",
-                       "Overbought" if rsi_val > 70 else "Oversold" if rsi_val < 30 else "Neutral")
+        cols[0].metric("RSI", f"{rsi_val:.1f}", "Overbought" if rsi_val > 70 else "Oversold" if rsi_val < 30 else "Neutral")
     if show_macd:
-        macd_val = h_data["macd"].iloc[-1]
-        cols[1].metric("MACD", f"{macd_val:.2f}")
+        cols[1].metric("MACD", f"{h_data['macd'].iloc[-1]:.2f}")
     if show_bb:
         bb_range = h_data["bb_upper"].iloc[-1] - h_data["bb_lower"].iloc[-1]
         if bb_range > 0:
@@ -639,7 +506,6 @@ if m_tgt:
     fig_map.update_layout(height=300, template="plotly_dark", paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
     st.plotly_chart(fig_map, use_container_width=True)
 
-# Leverage
 st.subheader("📊 Simulated Leverage Allocation")
 c_as = list(liquidity_profiles.keys())
 fig_c = go.Figure()
@@ -648,21 +514,18 @@ fig_c.add_trace(go.Bar(x=c_as, y=[liquidity_profiles[k]["shorts"] for k in c_as]
 fig_c.update_layout(height=280, barmode="group", template="plotly_dark", paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
 st.plotly_chart(fig_c, use_container_width=True)
 
-# On-chain
+# On-chain section
 if show_onchain and onchain_profiles:
     st.subheader("🔗 Real On-chain Metrics")
     for ticker, metrics in onchain_profiles.items():
         st.markdown(f"**{ticker}**")
-        st.dataframe(pd.DataFrame(list(metrics.items()), columns=["Metric", "Value"]),
-                     use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(list(metrics.items()), columns=["Metric", "Value"]), use_container_width=True, hide_index=True)
 
-# Pivot Matrix
 if matrix_rows:
     st.subheader("🧮 Side-by-Side Pivot Matrix (Daily Pivots)")
-    st.caption("Classic Floor Pivots calculated from the previous daily candle (correct method)")
+    st.caption("Classic Floor Pivots calculated from the previous daily candle")
     st.dataframe(pd.DataFrame(matrix_rows).set_index("Ticker"), use_container_width=True)
 
-# News & Sentiment
 st.markdown("---")
 col1, col2 = st.columns(2)
 
@@ -689,3 +552,5 @@ with col2:
     st.subheader("📊 Sentiment")
     fng_v, fng_c = get_fear_greed()
     st.metric("Fear & Greed", f"{fng_v}/100", fng_c)
+
+st.sidebar.success(f"Last refresh: {pd.Timestamp.now().strftime('%H:%M:%S')}")
