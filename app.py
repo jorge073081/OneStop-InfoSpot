@@ -30,7 +30,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("📈 Asset Intelligence Terminal")
-st.caption("Dark mode • Real Long/Short + Open Interest + Funding Rate • RSI • MACD • Bollinger • On-chain")
+st.caption("Dark mode • Real Long/Short + Open Interest + Funding Rate (Binance/Bybit/OKX) • RSI • MACD • Bollinger • On-chain")
 
 # -----------------------------
 # Sidebar
@@ -299,7 +299,8 @@ def get_real_onchain(ticker: str):
 @st.cache_data(ttl=60)
 def get_binance_futures_metrics(ticker: str):
     t = ticker.upper().replace("-USD", "").replace("USDT", "").replace("USD", "").strip()
-    symbol = f"{t}USDT"
+    symbol_binance = f"{t}USDT"
+    symbol_okx = f"{t}-USDT-SWAP"
     
     result = {
         "source": "Simulated (no exchange data)",
@@ -312,7 +313,7 @@ def get_binance_futures_metrics(ticker: str):
     # 1. Try Binance
     try:
         r = requests.get(
-            f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol={symbol}&period=1h&limit=1",
+            f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol={symbol_binance}&period=1h&limit=1",
             headers=HEADERS, timeout=8
         )
         if r.status_code == 200:
@@ -325,18 +326,18 @@ def get_binance_futures_metrics(ticker: str):
                     result["long_pct"] = round(long_acc / total * 100, 1)
                     result["short_pct"] = round(short_acc / total * 100, 1)
                     result["source"] = "Binance"
-        
-        r2 = requests.get(f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}", headers=HEADERS, timeout=8)
+
+        r2 = requests.get(f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol_binance}", headers=HEADERS, timeout=8)
         if r2.status_code == 200:
             oi = float(r2.json().get("openInterest", 0))
             if oi > 0:
                 result["oi"] = oi
-        
-        r3 = requests.get(f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={symbol}", headers=HEADERS, timeout=8)
+
+        r3 = requests.get(f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={symbol_binance}", headers=HEADERS, timeout=8)
         if r3.status_code == 200:
             fr = float(r3.json().get("lastFundingRate", 0))
             result["funding_rate"] = fr * 100
-            
+
         if result["source"] == "Binance":
             return result
     except Exception:
@@ -345,7 +346,7 @@ def get_binance_futures_metrics(ticker: str):
     # 2. Try Bybit
     try:
         r = requests.get(
-            f"https://api.bybit.com/v5/market/account-ratio?category=linear&symbol={symbol}&period=1h&limit=1",
+            f"https://api.bybit.com/v5/market/account-ratio?category=linear&symbol={symbol_binance}&period=1h&limit=1",
             headers=HEADERS, timeout=8
         )
         if r.status_code == 200:
@@ -359,9 +360,9 @@ def get_binance_futures_metrics(ticker: str):
                     result["long_pct"] = round(buy_ratio / total * 100, 1)
                     result["short_pct"] = round(sell_ratio / total * 100, 1)
                     result["source"] = "Bybit"
-        
+
         r2 = requests.get(
-            f"https://api.bybit.com/v5/market/open-interest?category=linear&symbol={symbol}&intervalTime=1h&limit=1",
+            f"https://api.bybit.com/v5/market/open-interest?category=linear&symbol={symbol_binance}&intervalTime=1h&limit=1",
             headers=HEADERS, timeout=8
         )
         if r2.status_code == 200:
@@ -370,9 +371,9 @@ def get_binance_futures_metrics(ticker: str):
                 oi = float(data["result"]["list"][0].get("openInterest", 0))
                 if oi > 0:
                     result["oi"] = oi
-        
+
         r3 = requests.get(
-            f"https://api.bybit.com/v5/market/funding/history?category=linear&symbol={symbol}&limit=1",
+            f"https://api.bybit.com/v5/market/funding/history?category=linear&symbol={symbol_binance}&limit=1",
             headers=HEADERS, timeout=8
         )
         if r3.status_code == 200:
@@ -380,14 +381,15 @@ def get_binance_futures_metrics(ticker: str):
             if data.get("retCode") == 0 and data.get("result", {}).get("list"):
                 fr = float(data["result"]["list"][0].get("fundingRate", 0))
                 result["funding_rate"] = fr * 100
-                
+
         if result["source"] == "Bybit":
             return result
     except Exception:
         pass
 
-    # 3. Try OKX
+    # 3. Try OKX (with Open Interest + Funding Rate)
     try:
+        # Long/Short
         r = requests.get(
             f"https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio?ccy={t}&period=1H",
             headers=HEADERS, timeout=8
@@ -401,7 +403,30 @@ def get_binance_futures_metrics(ticker: str):
                 result["long_pct"] = long_pct
                 result["short_pct"] = round(100 - long_pct, 1)
                 result["source"] = "OKX"
-                
+
+        # Open Interest
+        r2 = requests.get(
+            f"https://www.okx.com/api/v5/public/open-interest?instType=SWAP&instId={symbol_okx}",
+            headers=HEADERS, timeout=8
+        )
+        if r2.status_code == 200:
+            data = r2.json()
+            if data.get("code") == "0" and data.get("data"):
+                oi = float(data["data"][0].get("oi", 0))
+                if oi > 0:
+                    result["oi"] = oi
+
+        # Funding Rate
+        r3 = requests.get(
+            f"https://www.okx.com/api/v5/public/funding-rate?instId={symbol_okx}",
+            headers=HEADERS, timeout=8
+        )
+        if r3.status_code == 200:
+            data = r3.json()
+            if data.get("code") == "0" and data.get("data"):
+                fr = float(data["data"][0].get("fundingRate", 0))
+                result["funding_rate"] = fr * 100
+
         if result["source"] == "OKX":
             return result
     except Exception:
