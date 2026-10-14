@@ -22,39 +22,24 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Dark theme + Fonts
+# Dark theme CSS + Shiny Silver Comic Sans titles
 st.markdown(
     """
-    <link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
     <style>
-        /* Global font = Playfair Display */
-        html, body, .stApp, .stMarkdown, p, label, span, div,
-        h1, h2, h3, h4, h5, h6,
-        .stTextInput > div > div > input,
-        .stSelectbox, .stSlider, .stCheckbox,
-        [data-testid="stMetricValue"],
-        [data-testid="stMetricLabel"],
-        [data-testid="stSidebar"],
-        button, .stButton > button,
-        .stCaption, .stExpander {
-            font-family: 'Playfair Display', serif !important;
-        }
-
         .stApp { background-color: #0e1117; color: #fafafa; }
         section[data-testid="stSidebar"] { background-color: #1a1d24; }
         h1, h2, h3, h4, h5, h6, p, label, .stMarkdown { color: #fafafa !important; }
         [data-testid="stMetricValue"] { color: #00FF7F !important; }
 
-        /* Reduce top padding */
+        /* Reduce top padding of the whole page */
         .block-container {
             padding-top: 1.2rem !important;
         }
 
-        /* Main Title - Script Font */
         .silver-title {
-            font-family: 'Dancing Script', cursive !important;
-            font-size: 3.8rem;
-            font-weight: 700;
+            font-family: 'Comic Sans MS', 'Comic Sans', cursive;
+            font-size: 3.5rem;
+            font-weight: bold;
             text-align: center;
             margin: -0.6rem 0 0.15rem 0;
             letter-spacing: 2px;
@@ -75,11 +60,10 @@ st.markdown(
                     drop-shadow(0 0 12px rgba(255, 255, 255, 0.3));
         }
 
-        /* Subtitle - Script Font */
         .silver-subtitle {
-            font-family: 'Dancing Script', cursive !important;
-            font-size: 2.1rem;
-            font-weight: 600;
+            font-family: 'Comic Sans MS', 'Comic Sans', cursive;
+            font-size: 1.85rem;
+            font-weight: bold;
             text-align: center;
             margin: 0 0 0.9rem 0;
             letter-spacing: 1px;
@@ -692,7 +676,6 @@ def build_asset_chart(
         margin=dict(l=10, r=10, t=40, b=10),
         legend=dict(orientation="h", y=1.02),
         xaxis_rangeslider_visible=False,
-        font=dict(family="Playfair Display, serif"),
     )
     for i in range(1, rows + 1):
         fig.update_xaxes(rangeslider_visible=False, row=i, col=1)
@@ -738,6 +721,7 @@ st_autorefresh(interval=rf_rate * 1000, key="datarefresh")
 # 7. MAIN APP
 # ============================================================
 
+# ---- SHINY SILVER COMIC SANS TITLES (both centered) ----
 st.markdown('<div class="silver-title">OneStop-InfoSpot</div>', unsafe_allow_html=True)
 st.markdown('<div class="silver-subtitle">📈 Asset Intelligence Terminal</div>', unsafe_allow_html=True)
 
@@ -836,8 +820,7 @@ if not combined_df.empty:
         fig.add_trace(go.Scatter(x=combined_df.index, y=combined_df[col], name=col))
     fig.update_layout(height=320, template="plotly_dark",
                       paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
-                      margin=dict(l=10, r=10, t=30, b=10),
-                      font=dict(family="Playfair Display, serif"))
+                      margin=dict(l=10, r=10, t=30, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
 st.subheader("🔥 Asset Analysis Frameworks")
@@ -904,8 +887,7 @@ if m_tgt and m_tgt in data:
               "100x Short Liq", "50x Short Liq", "25x Short Liq"]
     fig_map = go.Figure(go.Bar(x=labels, y=levels, marker=dict(color=levels, colorscale="Portland")))
     fig_map.update_layout(height=320, template="plotly_dark",
-                          paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
-                          font=dict(family="Playfair Display, serif"))
+                          paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
     st.plotly_chart(fig_map, use_container_width=True)
 
 st.subheader("📊 Real-Time Futures Metrics")
@@ -924,8 +906,7 @@ if liquidity_profiles:
                            name="Short %", marker_color="#FF4500",
                            text=[f"{liquidity_profiles[k]['shorts']:.1f}%" for k in c_as], textposition="auto"))
     fig_c.update_layout(height=320, barmode="group", template="plotly_dark",
-                        paper_bgcolor="#0e1117", plot_bgcolor="#0e1117", yaxis_title="%",
-                        font=dict(family="Playfair Display, serif"))
+                        paper_bgcolor="#0e1117", plot_bgcolor="#0e1117", yaxis_title="%")
     st.plotly_chart(fig_c, use_container_width=True)
 
 if show_onchain and onchain_profiles:
