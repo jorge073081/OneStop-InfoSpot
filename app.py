@@ -22,7 +22,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Dark theme CSS + Shiny Silver Comic Sans title (moved higher)
+# Dark theme CSS + Shiny Silver Comic Sans titles
 st.markdown(
     """
     <style>
@@ -41,10 +41,9 @@ st.markdown(
             font-size: 3.5rem;
             font-weight: bold;
             text-align: center;
-            margin: -0.6rem 0 0.6rem 0;   /* moved higher */
+            margin: -0.6rem 0 0.15rem 0;
             letter-spacing: 2px;
 
-            /* Shiny Silver Effect */
             background: linear-gradient(
                 to bottom,
                 #ffffff 0%,
@@ -57,9 +56,32 @@ st.markdown(
             -webkit-text-fill-color: transparent;
             background-clip: text;
 
-            /* Extra shine / glow */
             filter: drop-shadow(0 0 6px rgba(192, 192, 192, 0.7))
                     drop-shadow(0 0 12px rgba(255, 255, 255, 0.3));
+        }
+
+        .silver-subtitle {
+            font-family: 'Comic Sans MS', 'Comic Sans', cursive;
+            font-size: 1.85rem;
+            font-weight: bold;
+            text-align: center;
+            margin: 0 0 0.9rem 0;
+            letter-spacing: 1px;
+
+            background: linear-gradient(
+                to bottom,
+                #ffffff 0%,
+                #e8e8e8 25%,
+                #c0c0c0 50%,
+                #a0a0a0 75%,
+                #d0d0d0 100%
+            );
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+
+            filter: drop-shadow(0 0 4px rgba(192, 192, 192, 0.6))
+                    drop-shadow(0 0 8px rgba(255, 255, 255, 0.25));
         }
     </style>
     """,
@@ -699,10 +721,10 @@ st_autorefresh(interval=rf_rate * 1000, key="datarefresh")
 # 7. MAIN APP
 # ============================================================
 
-# ---- SHINY SILVER COMIC SANS TITLE (moved higher) ----
+# ---- SHINY SILVER COMIC SANS TITLES (both centered) ----
 st.markdown('<div class="silver-title">OneStop-InfoSpot</div>', unsafe_allow_html=True)
+st.markdown('<div class="silver-subtitle">📈 Asset Intelligence Terminal</div>', unsafe_allow_html=True)
 
-st.title("📈 Asset Intelligence Terminal")
 st.caption("Dark mode • Candlesticks • Long/Short + OI + Funding • RSI • MACD • Bollinger • On-chain")
 
 if not tkrs:
