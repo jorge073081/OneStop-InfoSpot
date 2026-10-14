@@ -17,19 +17,30 @@ from typing import Dict, List, Optional, Tuple, Any
 nltk.download("vader_lexicon", quiet=True)
 
 st.set_page_config(
-    page_title="Asset Intelligence Terminal",
+    page_title="OneStop-InfoSpot | Asset Intelligence Terminal",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# Dark theme CSS
+# Dark theme CSS + Old English font
 st.markdown(
     """
+    <link href="https://fonts.googleapis.com/css2?family=UnifrakturMaguntia&display=swap" rel="stylesheet">
     <style>
         .stApp { background-color: #0e1117; color: #fafafa; }
         section[data-testid="stSidebar"] { background-color: #1a1d24; }
         h1, h2, h3, h4, h5, h6, p, label, .stMarkdown { color: #fafafa !important; }
         [data-testid="stMetricValue"] { color: #00FF7F !important; }
+
+        .old-english-title {
+            font-family: 'UnifrakturMaguntia', 'Old English Text MT', 'Times New Roman', serif;
+            font-size: 3.8rem;
+            color: #00FF7F;
+            text-align: center;
+            margin: 0.2rem 0 0.8rem 0;
+            letter-spacing: 2px;
+            text-shadow: 0 0 12px rgba(0, 255, 127, 0.35);
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -513,9 +524,6 @@ def build_asset_chart(
     h_data = h_data.copy()
     if show_baseline:
         h_data["baseline"] = h_data["close"].mean()
-    if show_long_baseline:
-        # long_avg is calculated outside and passed if needed
-        pass
     if show_vwap and "volume" in h_data.columns:
         h_data["vwap"] = (h_data["close"] * h_data["volume"]).cumsum() / h_data["volume"].cumsum()
     if show_vs_btc and btc_data is not None:
@@ -758,6 +766,10 @@ st_autorefresh(interval=rf_rate * 1000, key="datarefresh")
 # ============================================================
 # 7. MAIN APP LOGIC
 # ============================================================
+
+# ---- OLD ENGLISH TITLE ----
+st.markdown('<div class="old-english-title">OneStop-InfoSpot</div>', unsafe_allow_html=True)
+
 st.title("📈 Asset Intelligence Terminal")
 st.caption("Dark mode • Candlesticks • Long/Short + OI + Funding • RSI • MACD • Bollinger • On-chain")
 
