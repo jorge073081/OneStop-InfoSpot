@@ -27,7 +27,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("📈 Asset Intelligence Terminal")
-st.caption("Dark mode • Real BTC on-chain • RSI • MACD • Bollinger • Volume Profile • Correct Daily Pivots")
+st.caption("Dark mode • Real BTC on-chain • RSI • MACD • Bollinger • Volume Profile • Correct Daily Pivots • Baselines • VWAP")
 
 # -----------------------------
 # Sidebar
@@ -49,6 +49,13 @@ show_bb = st.sidebar.checkbox("Bollinger Bands (20,2)", value=True)
 show_rsi = st.sidebar.checkbox("RSI (14)", value=True)
 show_macd = st.sidebar.checkbox("MACD (12,26,9)", value=True)
 show_vol_profile = st.sidebar.checkbox("Volume Profile", value=True)
+
+st.sidebar.subheader("Overlays & On-chain")
+show_baseline = st.sidebar.checkbox("Historical Baseline (Period Avg)", value=True)
+show_long_baseline = st.sidebar.checkbox("Long-term Baseline (1Y Avg)", value=False)
+show_vwap = st.sidebar.checkbox("VWAP", value=False)
+show_vs_btc = st.sidebar.checkbox("Relative Strength vs BTC", value=False)
+show_onchain = st.sidebar.checkbox("Show On-chain Metrics", value=True)
 
 # Resolution mapping
 if res_disp == "15min":
@@ -137,6 +144,20 @@ def load_ticker_data(tickers: tuple, interval: str, lookback: int, period: str, 
     return results
 
 @st.cache_data(ttl=300)
+def get_long_term_avg(ticker: str):
+    """1-year average price for long-term baseline"""
+    try:
+        hist = yf.Ticker(ticker).history(period="1y", interval="1d", auto_adjust=True)
+        if hist.empty:
+            return None
+        if isinstance(hist.columns, pd.MultiIndex):
+            hist.columns = hist.columns.get_level_values(0)
+        hist.columns = [str(c).lower() for c in hist.columns]
+        return float(hist["close"].mean())
+    except Exception:
+        return None
+
+@st.cache_data(ttl=300)
 def get_daily_pivots(tickers: tuple):
     """Classic pivots always calculated from the previous daily candle"""
     pivots = {}
@@ -198,7 +219,9 @@ def get_crypto_news(max_items=12):
 
 @st.cache_data(ttl=180)
 def get_real_onchain(ticker: str):
-    t = ticker.upper().replace("-USD", "").replace("USDT", "")
+    t = ticker.upper().replace("-USD", "").replace("USDT", "").replace("USD", "")
+
+    # ---------- Bitcoin ----------
     if t in ["BTC", "BITCOIN"]:
         try:
             stats = requests.get("https://api.blockchain.info/stats", timeout=8).json()
@@ -222,9 +245,67 @@ def get_real_onchain(ticker: str):
             }
         except Exception as e:
             return {"Error": str(e)}
+
+    # ---------- Ethereum ----------
+    if t in ["ETH", "ETHEREUM"]:
+        try:
+            eth_stats = requests.get("https://api.etherscan.io/api?module=stats&action=ethsupply", timeout=8).json()
+            llama = requests.get("https://api.llama.fi/v2/chains", timeout=8).json()
+            eth_llama = next((c for c in llama if c.get("name") == "Ethereum"), {})
+            return {
+                "Network": "Ethereum",
+                "Circulating Supply (approx)": f"{int(eth_stats.get('result', 0)) / 1e18:,.0f} ETH" if eth_stats.get("status") == "1" else "N/A",
+                "TVL (DefiLlama)": f"${eth_llama.get('tvl', 0):,.0f}" if eth_llama else "N/A",
+                "Chain Rank (by TVL)": eth_llama.get("tvlRank", "N/A"),
+                "Source": "Etherscan + DefiLlama (free)"
+            }
+        except Exception as e:
+            return {"Error": str(e), "Note": "ETH free endpoints limited"}
+
+    # ---------- Other major cryptos via DefiLlama ----------
+    try:
+        llama_map = {
+            "SOL": "Solana", "ADA": "Cardano", "XRP": "Ripple", "DOGE": "Dogecoin",
+            "AVAX": "Avalanche", "LINK": "Chainlink", "DOT": "Polkadot", "MATIC": "Polygon",
+            "ATOM": "Cosmos", "NEAR": "Near", "FTM": "Fantom", "ALGO": "Algorand",
+            "ICP": "Internet Computer", "FIL": "Filecoin", "LTC": "Litecoin", "BCH": "Bitcoin Cash",
+            "SUI": "Sui", "APT": "Aptos", "SEI": "Sei", "TIA": "Celestia"
+        }
+
+        if t in llama_map:
+            chain_name = llama_map[t]
+            llama = requests.get("https://api.llama.fi/v2/chains", timeout=8).json()
+            chain = next((c for c in llama if c.get("name", "").lower() == chain_name.lower()), None)
+
+            if chain:
+                return {
+                    "Network": chain_name,
+                    "TVL": f"${chain.get('tvl', 0):,.0f}",
+                    "TVL Rank": chain.get("tvlRank", "N/A"),
+                    "Token Symbol": chain.get("tokenSymbol", t),
+                    "Source": "DefiLlama (free)"
+                }
+
+        # Try protocol endpoint
+        proto = requests.get(f"https://api.llama.fi/protocol/{t.lower()}", timeout=6)
+        if proto.status_code == 200:
+            data = proto.json()
+            tvl_val = data.get("tvl", 0)
+            if isinstance(tvl_val, list):
+                tvl_val = tvl_val[-1].get("totalLiquidityUSD", 0) if tvl_val else 0
+            return {
+                "Protocol": data.get("name", t),
+                "TVL": f"${tvl_val:,.0f}" if isinstance(tvl_val, (int, float)) else "N/A",
+                "Category": data.get("category", "N/A"),
+                "Source": "DefiLlama Protocol"
+            }
+    except Exception:
+        pass
+
     return {
-        "Note": f"Real on-chain for {ticker} needs a keyed API.",
-        "Status": "Only BTC fully supported free"
+        "Note": f"Limited free on-chain data for {ticker}",
+        "Status": "BTC fully supported • ETH partial • Major L1s via DefiLlama TVL",
+        "Tip": "Deep metrics (active addresses, fees, etc.) require paid APIs (Glassnode / CryptoQuant / Dune)"
     }
 
 # -----------------------------
@@ -243,6 +324,17 @@ if not data:
 
 # Get correct daily pivots once
 daily_pivots = get_daily_pivots(tuple(tkrs))
+
+# Pre-fetch BTC data for relative strength if needed
+btc_data = None
+if show_vs_btc and "BTC-USD" not in data:
+    try:
+        btc_raw = load_ticker_data(("BTC-USD",), interval, lookback_bars, period, is_6h)
+        btc_data = btc_raw.get("BTC-USD")
+    except Exception:
+        btc_data = None
+elif show_vs_btc and "BTC-USD" in data:
+    btc_data = data["BTC-USD"]
 
 # -----------------------------
 # Derived Metrics
@@ -275,7 +367,7 @@ for t, hist in data.items():
         "longs": long_r, "shorts": short_r
     }
 
-    if "-USD" in t or t in ["BTC", "ETH", "SOL", "ADA", "XRP"]:
+    if show_onchain and ("-USD" in t or t in ["BTC", "ETH", "SOL", "ADA", "XRP", "DOGE", "AVAX", "LINK"]):
         onchain_profiles[t] = get_real_onchain(t)
 
     # Correct Daily Pivots
@@ -322,29 +414,54 @@ st.subheader("🔥 Asset Analysis Frameworks")
 m_tgt = st.selectbox("Select Target Asset:", list(liquidity_profiles.keys()))
 
 if m_tgt:
-    h_data = chart_historical_store[m_tgt]
+    h_data = chart_historical_store[m_tgt].copy()
+
+    # Calculate overlays
+    if show_baseline:
+        h_data["baseline"] = h_data["close"].mean()
+
+    if show_long_baseline:
+        long_avg = get_long_term_avg(m_tgt)
+        if long_avg is not None:
+            h_data["long_baseline"] = long_avg
+
+    if show_vwap and "volume" in h_data.columns:
+        h_data["vwap"] = (h_data["close"] * h_data["volume"]).cumsum() / h_data["volume"].cumsum()
+
+    # Relative strength vs BTC
+    if show_vs_btc and btc_data is not None:
+        # Align indexes
+        common_idx = h_data.index.intersection(btc_data.index)
+        if len(common_idx) > 5:
+            asset_norm = h_data.loc[common_idx, "close"] / h_data.loc[common_idx, "close"].iloc[0]
+            btc_norm = btc_data.loc[common_idx, "close"] / btc_data.loc[common_idx, "close"].iloc[0]
+            h_data.loc[common_idx, "vs_btc"] = (asset_norm / btc_norm - 1) * 100
 
     rows = 1
     if show_rsi: rows += 1
     if show_macd: rows += 1
     if show_vol_profile: rows += 1
+    if show_vs_btc and "vs_btc" in h_data.columns: rows += 1
 
-    row_heights = [0.55] + [0.15] * (rows - 1) if rows > 1 else [1.0]
+    row_heights = [0.50] + [0.125] * (rows - 1) if rows > 1 else [1.0]
+
+    subplot_titles = ["Price"]
+    if show_rsi: subplot_titles.append("RSI (14)")
+    if show_macd: subplot_titles.append("MACD")
+    if show_vol_profile: subplot_titles.append("Volume Profile")
+    if show_vs_btc and "vs_btc" in h_data.columns: subplot_titles.append("vs BTC (%)")
 
     fig = make_subplots(
         rows=rows, cols=1,
         shared_xaxes=True,
         vertical_spacing=0.02,
         row_heights=row_heights,
-        subplot_titles=["Price"] +
-                       (["RSI (14)"] if show_rsi else []) +
-                       (["MACD"] if show_macd else []) +
-                       (["Volume Profile"] if show_vol_profile else [])
+        subplot_titles=subplot_titles
     )
 
     current_row = 1
 
-    # Price + BB + SMAs
+    # Price + BB + SMAs + Baselines + VWAP
     fig.add_trace(go.Scatter(x=h_data.index, y=h_data["close"], name="Price",
                              line=dict(color="#00FFFF", width=2)), row=current_row, col=1)
 
@@ -363,6 +480,27 @@ if m_tgt:
     if show_sma200:
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["sma200"], name="SMA 200",
                                  line=dict(color="#FF4500", width=1.5)), row=current_row, col=1)
+
+    if show_baseline and "baseline" in h_data.columns:
+        fig.add_trace(go.Scatter(
+            x=h_data.index, y=h_data["baseline"],
+            name="Hist. Baseline (Avg)",
+            line=dict(color="#FFD700", width=1.8, dash="dot")
+        ), row=current_row, col=1)
+
+    if show_long_baseline and "long_baseline" in h_data.columns:
+        fig.add_trace(go.Scatter(
+            x=h_data.index, y=h_data["long_baseline"],
+            name="1Y Baseline",
+            line=dict(color="#FF8C00", width=1.8, dash="dashdot")
+        ), row=current_row, col=1)
+
+    if show_vwap and "vwap" in h_data.columns:
+        fig.add_trace(go.Scatter(
+            x=h_data.index, y=h_data["vwap"],
+            name="VWAP",
+            line=dict(color="#FF00FF", width=1.6)
+        ), row=current_row, col=1)
 
     current_row += 1
 
@@ -401,9 +539,19 @@ if m_tgt:
             marker_color="rgba(0, 191, 255, 0.45)",
             showlegend=False
         ), row=current_row, col=1)
+        current_row += 1
+
+    # Relative Strength vs BTC
+    if show_vs_btc and "vs_btc" in h_data.columns:
+        fig.add_trace(go.Scatter(
+            x=h_data.index, y=h_data["vs_btc"],
+            name="vs BTC %",
+            line=dict(color="#00FFAA", width=1.8)
+        ), row=current_row, col=1)
+        fig.add_hline(y=0, line_dash="dash", line_color="gray", row=current_row, col=1)
 
     fig.update_layout(
-        height=200 + (rows * 160),
+        height=220 + (rows * 150),
         template="plotly_dark",
         paper_bgcolor="#0e1117",
         plot_bgcolor="#0e1117",
@@ -413,7 +561,7 @@ if m_tgt:
     st.plotly_chart(fig, use_container_width=True)
 
     # Quick metrics
-    cols = st.columns(4)
+    cols = st.columns(5)
     if show_rsi and not h_data["rsi"].isna().all():
         rsi_val = h_data["rsi"].iloc[-1]
         cols[0].metric("RSI", f"{rsi_val:.1f}",
@@ -426,6 +574,11 @@ if m_tgt:
         if bb_range > 0:
             bb_pos = (h_data["close"].iloc[-1] - h_data["bb_lower"].iloc[-1]) / bb_range
             cols[2].metric("%B (BB)", f"{bb_pos*100:.1f}%")
+    if show_baseline and "baseline" in h_data.columns:
+        dist = ((h_data["close"].iloc[-1] / h_data["baseline"].iloc[-1]) - 1) * 100
+        cols[3].metric("vs Baseline", f"{dist:+.1f}%")
+    if show_vs_btc and "vs_btc" in h_data.columns:
+        cols[4].metric("vs BTC", f"{h_data['vs_btc'].iloc[-1]:+.1f}%")
 
     # Liquidity map
     st.markdown("#### 🔥 Simulated Liquidity Map")
@@ -447,14 +600,14 @@ fig_c.update_layout(height=280, barmode="group", template="plotly_dark", paper_b
 st.plotly_chart(fig_c, use_container_width=True)
 
 # On-chain
-if onchain_profiles:
-    st.subheader("🔗 Real On-Chain Metrics")
+if show_onchain and onchain_profiles:
+    st.subheader("🔗 Real On-chain Metrics")
     for ticker, metrics in onchain_profiles.items():
         st.markdown(f"**{ticker}**")
         st.dataframe(pd.DataFrame(list(metrics.items()), columns=["Metric", "Value"]),
                      use_container_width=True, hide_index=True)
 
-# Pivot Matrix (now correct)
+# Pivot Matrix
 if matrix_rows:
     st.subheader("🧮 Side-by-Side Pivot Matrix (Daily Pivots)")
     st.caption("Classic Floor Pivots calculated from the previous daily candle (correct method)")
