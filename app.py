@@ -22,12 +22,12 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Dark theme + Script Font (Dancing Script) for everything
+# Dark theme + Fonts
 st.markdown(
     """
-    <link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
     <style>
-        /* Global Script Font */
+        /* Global font = Playfair Display */
         html, body, .stApp, .stMarkdown, p, label, span, div,
         h1, h2, h3, h4, h5, h6,
         .stTextInput > div > div > input,
@@ -35,8 +35,9 @@ st.markdown(
         [data-testid="stMetricValue"],
         [data-testid="stMetricLabel"],
         [data-testid="stSidebar"],
-        button, .stButton > button {
-            font-family: 'Dancing Script', cursive !important;
+        button, .stButton > button,
+        .stCaption, .stExpander {
+            font-family: 'Playfair Display', serif !important;
         }
 
         .stApp { background-color: #0e1117; color: #fafafa; }
@@ -49,7 +50,7 @@ st.markdown(
             padding-top: 1.2rem !important;
         }
 
-        /* Main Title */
+        /* Main Title - Script Font */
         .silver-title {
             font-family: 'Dancing Script', cursive !important;
             font-size: 3.8rem;
@@ -74,7 +75,7 @@ st.markdown(
                     drop-shadow(0 0 12px rgba(255, 255, 255, 0.3));
         }
 
-        /* Subtitle */
+        /* Subtitle - Script Font */
         .silver-subtitle {
             font-family: 'Dancing Script', cursive !important;
             font-size: 2.1rem;
@@ -691,7 +692,7 @@ def build_asset_chart(
         margin=dict(l=10, r=10, t=40, b=10),
         legend=dict(orientation="h", y=1.02),
         xaxis_rangeslider_visible=False,
-        font=dict(family="Dancing Script, cursive"),
+        font=dict(family="Playfair Display, serif"),
     )
     for i in range(1, rows + 1):
         fig.update_xaxes(rangeslider_visible=False, row=i, col=1)
@@ -836,7 +837,7 @@ if not combined_df.empty:
     fig.update_layout(height=320, template="plotly_dark",
                       paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
                       margin=dict(l=10, r=10, t=30, b=10),
-                      font=dict(family="Dancing Script, cursive"))
+                      font=dict(family="Playfair Display, serif"))
     st.plotly_chart(fig, use_container_width=True)
 
 st.subheader("🔥 Asset Analysis Frameworks")
@@ -904,7 +905,7 @@ if m_tgt and m_tgt in data:
     fig_map = go.Figure(go.Bar(x=labels, y=levels, marker=dict(color=levels, colorscale="Portland")))
     fig_map.update_layout(height=320, template="plotly_dark",
                           paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
-                          font=dict(family="Dancing Script, cursive"))
+                          font=dict(family="Playfair Display, serif"))
     st.plotly_chart(fig_map, use_container_width=True)
 
 st.subheader("📊 Real-Time Futures Metrics")
@@ -924,7 +925,7 @@ if liquidity_profiles:
                            text=[f"{liquidity_profiles[k]['shorts']:.1f}%" for k in c_as], textposition="auto"))
     fig_c.update_layout(height=320, barmode="group", template="plotly_dark",
                         paper_bgcolor="#0e1117", plot_bgcolor="#0e1117", yaxis_title="%",
-                        font=dict(family="Dancing Script, cursive"))
+                        font=dict(family="Playfair Display, serif"))
     st.plotly_chart(fig_c, use_container_width=True)
 
 if show_onchain and onchain_profiles:
