@@ -22,25 +22,39 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Dark theme CSS + clearer Old English font
+# Dark theme CSS + Shiny Silver Comic Sans title
 st.markdown(
     """
-    <link href="https://fonts.googleapis.com/css2?family=UnifrakturCook:wght@700&display=swap" rel="stylesheet">
     <style>
         .stApp { background-color: #0e1117; color: #fafafa; }
         section[data-testid="stSidebar"] { background-color: #1a1d24; }
         h1, h2, h3, h4, h5, h6, p, label, .stMarkdown { color: #fafafa !important; }
         [data-testid="stMetricValue"] { color: #00FF7F !important; }
 
-        .old-english-title {
-            font-family: 'UnifrakturCook', 'Old English Text MT', 'Times New Roman', serif;
-            font-size: 3.6rem;
-            font-weight: 700;
-            color: #00FF7F;
+        .silver-title {
+            font-family: 'Comic Sans MS', 'Comic Sans', cursive;
+            font-size: 3.5rem;
+            font-weight: bold;
             text-align: center;
-            margin: 0.2rem 0 0.8rem 0;
-            letter-spacing: 3px;
-            text-shadow: 0 0 12px rgba(0, 255, 127, 0.35);
+            margin: 0.3rem 0 0.9rem 0;
+            letter-spacing: 2px;
+
+            /* Shiny Silver Effect */
+            background: linear-gradient(
+                to bottom,
+                #ffffff 0%,
+                #e8e8e8 25%,
+                #c0c0c0 50%,
+                #a0a0a0 75%,
+                #d0d0d0 100%
+            );
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+
+            /* Extra shine / glow */
+            filter: drop-shadow(0 0 6px rgba(192, 192, 192, 0.7))
+                    drop-shadow(0 0 12px rgba(255, 255, 255, 0.3));
         }
     </style>
     """,
@@ -249,14 +263,12 @@ def get_crypto_news(max_items: int = 12) -> List[Dict]:
 def get_real_onchain(ticker: str) -> Dict[str, Any]:
     t = ticker.upper().replace("-USD", "").replace("USDT", "").replace("USD", "").strip()
 
-    # Bitcoin special case
     if t in ["BTC", "BITCOIN"]:
         try:
             stats = requests.get("https://api.blockchain.info/stats", headers=HEADERS, timeout=10).json()
             addr_resp = requests.get(
                 "https://api.blockchain.info/charts/n-unique-addresses?timespan=5days&format=json",
-                headers=HEADERS,
-                timeout=10,
+                headers=HEADERS, timeout=10,
             ).json()
             latest_addr = int(addr_resp["values"][-1]["y"]) if addr_resp.get("values") else "N/A"
             hash_rate_ehs = stats.get("hash_rate", 0) / 1e9
@@ -275,7 +287,6 @@ def get_real_onchain(ticker: str) -> Dict[str, Any]:
         except Exception as e:
             return {"Error": f"BTC failed: {str(e)[:100]}"}
 
-    # DefiLlama chains
     try:
         r = requests.get("https://api.llama.fi/v2/chains", headers=HEADERS, timeout=12)
         chains = r.json()
@@ -304,7 +315,6 @@ def get_real_onchain(ticker: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # DefiLlama protocol
     try:
         slug_map = {
             "ONDO": "ondo-finance", "AAVE": "aave", "UNI": "uniswap", "LINK": "chainlink",
@@ -329,7 +339,6 @@ def get_real_onchain(ticker: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # CoinGecko fallback
     try:
         cg_ids = {
             "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "XRP": "ripple",
@@ -374,7 +383,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         "funding_rate": None,
     }
 
-    # --- Binance ---
+    # Binance
     try:
         r = requests.get(
             f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol={symbol_binance}&period=1h&limit=1",
@@ -412,7 +421,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # --- Bybit ---
+    # Bybit
     try:
         r = requests.get(
             f"https://api.bybit.com/v5/market/account-ratio?category=linear&symbol={symbol_binance}&period=1h&limit=1",
@@ -456,7 +465,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # --- OKX ---
+    # OKX
     try:
         r = requests.get(
             f"https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio?ccy={t}&period=1H",
@@ -502,7 +511,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
 
 
 # ============================================================
-# 5. CHART BUILDING (easy to extend)
+# 5. CHART BUILDING
 # ============================================================
 def build_asset_chart(
     h_data: pd.DataFrame,
@@ -519,9 +528,7 @@ def build_asset_chart(
     show_vs_btc: bool,
     btc_data: Optional[pd.DataFrame] = None,
 ) -> go.Figure:
-    """Build the multi-panel asset analysis chart. Designed to be easy to extend."""
 
-    # Prepare extra columns
     h_data = h_data.copy()
     if show_baseline:
         h_data["baseline"] = h_data["close"].mean()
@@ -534,49 +541,34 @@ def build_asset_chart(
             btc_norm = btc_data.loc[common_idx, "close"] / btc_data.loc[common_idx, "close"].iloc[0]
             h_data.loc[common_idx, "vs_btc"] = (asset_norm / btc_norm - 1) * 100
 
-    # Determine number of rows
     rows = 1
-    if show_rsi:
-        rows += 1
-    if show_macd:
-        rows += 1
-    if show_vol_profile:
-        rows += 1
-    if show_vs_btc and "vs_btc" in h_data.columns:
-        rows += 1
+    if show_rsi: rows += 1
+    if show_macd: rows += 1
+    if show_vol_profile: rows += 1
+    if show_vs_btc and "vs_btc" in h_data.columns: rows += 1
 
     row_heights = [0.50] + [0.125] * (rows - 1) if rows > 1 else [1.0]
     subplot_titles = ["Price"]
-    if show_rsi:
-        subplot_titles.append("RSI (14)")
-    if show_macd:
-        subplot_titles.append("MACD")
-    if show_vol_profile:
-        subplot_titles.append("Volume Profile")
-    if show_vs_btc and "vs_btc" in h_data.columns:
-        subplot_titles.append("vs BTC (%)")
+    if show_rsi: subplot_titles.append("RSI (14)")
+    if show_macd: subplot_titles.append("MACD")
+    if show_vol_profile: subplot_titles.append("Volume Profile")
+    if show_vs_btc and "vs_btc" in h_data.columns: subplot_titles.append("vs BTC (%)")
 
     fig = make_subplots(
-        rows=rows,
-        cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.02,
-        row_heights=row_heights,
+        rows=rows, cols=1, shared_xaxes=True,
+        vertical_spacing=0.02, row_heights=row_heights,
         subplot_titles=subplot_titles,
     )
 
     current_row = 1
 
-    # ---- Price panel (Candlestick or Line) ----
     has_ohlc = all(col in h_data.columns for col in ["open", "high", "low", "close"])
     if show_candles and has_ohlc:
         fig.add_trace(
             go.Candlestick(
                 x=h_data.index,
-                open=h_data["open"],
-                high=h_data["high"],
-                low=h_data["low"],
-                close=h_data["close"],
+                open=h_data["open"], high=h_data["high"],
+                low=h_data["low"], close=h_data["close"],
                 name="Price",
                 increasing_line_color="#00FF7F",
                 decreasing_line_color="#FF4500",
@@ -584,136 +576,77 @@ def build_asset_chart(
                 decreasing_fillcolor="#FF4500",
                 line=dict(width=1),
             ),
-            row=current_row,
-            col=1,
+            row=current_row, col=1,
         )
     else:
         fig.add_trace(
             go.Scatter(
-                x=h_data.index,
-                y=h_data["close"],
-                name="Price",
-                line=dict(color="#00FFFF", width=2),
+                x=h_data.index, y=h_data["close"],
+                name="Price", line=dict(color="#00FFFF", width=2),
             ),
-            row=current_row,
-            col=1,
+            row=current_row, col=1,
         )
 
-    # Overlays on price panel
     if show_bb and "bb_upper" in h_data.columns:
-        fig.add_trace(
-            go.Scatter(
-                x=h_data.index, y=h_data["bb_upper"], name="BB Upper",
-                line=dict(color="rgba(255,255,255,0.3)", width=1), showlegend=False,
-            ),
-            row=current_row, col=1,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=h_data.index, y=h_data["bb_lower"], name="BB Lower",
-                line=dict(color="rgba(255,255,255,0.3)", width=1),
-                fill="tonexty", fillcolor="rgba(0,255,127,0.08)",
-            ),
-            row=current_row, col=1,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=h_data.index, y=h_data["bb_mid"], name="BB Mid",
-                line=dict(color="rgba(255,255,255,0.5)", width=1, dash="dot"),
-            ),
-            row=current_row, col=1,
-        )
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["bb_upper"], name="BB Upper",
+                                 line=dict(color="rgba(255,255,255,0.3)", width=1), showlegend=False), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["bb_lower"], name="BB Lower",
+                                 line=dict(color="rgba(255,255,255,0.3)", width=1),
+                                 fill="tonexty", fillcolor="rgba(0,255,127,0.08)"), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["bb_mid"], name="BB Mid",
+                                 line=dict(color="rgba(255,255,255,0.5)", width=1, dash="dot")), row=current_row, col=1)
 
     if show_sma50 and "sma50" in h_data.columns:
-        fig.add_trace(
-            go.Scatter(
-                x=h_data.index, y=h_data["sma50"], name="SMA 50",
-                line=dict(color="#00FF7F", width=1.5, dash="dash"),
-            ),
-            row=current_row, col=1,
-        )
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["sma50"], name="SMA 50",
+                                 line=dict(color="#00FF7F", width=1.5, dash="dash")), row=current_row, col=1)
     if show_sma200 and "sma200" in h_data.columns:
-        fig.add_trace(
-            go.Scatter(
-                x=h_data.index, y=h_data["sma200"], name="SMA 200",
-                line=dict(color="#FF4500", width=1.5),
-            ),
-            row=current_row, col=1,
-        )
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["sma200"], name="SMA 200",
+                                 line=dict(color="#FF4500", width=1.5)), row=current_row, col=1)
     if show_baseline and "baseline" in h_data.columns:
-        fig.add_trace(
-            go.Scatter(
-                x=h_data.index, y=h_data["baseline"], name="Hist. Baseline (Avg)",
-                line=dict(color="#FFD700", width=1.8, dash="dot"),
-            ),
-            row=current_row, col=1,
-        )
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["baseline"], name="Hist. Baseline (Avg)",
+                                 line=dict(color="#FFD700", width=1.8, dash="dot")), row=current_row, col=1)
     if show_vwap and "vwap" in h_data.columns:
-        fig.add_trace(
-            go.Scatter(
-                x=h_data.index, y=h_data["vwap"], name="VWAP",
-                line=dict(color="#FF00FF", width=1.6),
-            ),
-            row=current_row, col=1,
-        )
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["vwap"], name="VWAP",
+                                 line=dict(color="#FF00FF", width=1.6)), row=current_row, col=1)
 
     current_row += 1
 
-    # ---- RSI ----
     if show_rsi and "rsi" in h_data.columns:
-        fig.add_trace(
-            go.Scatter(x=h_data.index, y=h_data["rsi"], name="RSI", line=dict(color="#FFD700", width=1.5)),
-            row=current_row, col=1,
-        )
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["rsi"], name="RSI",
+                                 line=dict(color="#FFD700", width=1.5)), row=current_row, col=1)
         fig.add_hline(y=70, line_dash="dash", line_color="red", row=current_row, col=1)
         fig.add_hline(y=30, line_dash="dash", line_color="lime", row=current_row, col=1)
         fig.add_hline(y=50, line_dash="dot", line_color="gray", row=current_row, col=1)
         fig.update_yaxes(range=[0, 100], row=current_row, col=1)
         current_row += 1
 
-    # ---- MACD ----
     if show_macd and "macd_hist" in h_data.columns:
         colors = ["#00FF7F" if v >= 0 else "#FF4500" for v in h_data["macd_hist"]]
-        fig.add_trace(
-            go.Bar(x=h_data.index, y=h_data["macd_hist"], name="Histogram", marker_color=colors, showlegend=False),
-            row=current_row, col=1,
-        )
-        fig.add_trace(
-            go.Scatter(x=h_data.index, y=h_data["macd"], name="MACD", line=dict(color="#00BFFF", width=1.5)),
-            row=current_row, col=1,
-        )
-        fig.add_trace(
-            go.Scatter(x=h_data.index, y=h_data["macd_signal"], name="Signal", line=dict(color="#FF69B4", width=1.5)),
-            row=current_row, col=1,
-        )
+        fig.add_trace(go.Bar(x=h_data.index, y=h_data["macd_hist"], name="Histogram",
+                             marker_color=colors, showlegend=False), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["macd"], name="MACD",
+                                 line=dict(color="#00BFFF", width=1.5)), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["macd_signal"], name="Signal",
+                                 line=dict(color="#FF69B4", width=1.5)), row=current_row, col=1)
         current_row += 1
 
-    # ---- Volume Profile ----
     if show_vol_profile and "volume" in h_data.columns:
         try:
             price_bins = pd.cut(h_data["close"], bins=24)
             vol_profile = h_data.groupby(price_bins, observed=True)["volume"].sum()
             bin_centers = [interval.mid for interval in vol_profile.index]
-            fig.add_trace(
-                go.Bar(
-                    x=vol_profile.values, y=bin_centers, orientation="h",
-                    name="Vol Profile", marker_color="rgba(0, 191, 255, 0.45)", showlegend=False,
-                ),
-                row=current_row, col=1,
-            )
+            fig.add_trace(go.Bar(x=vol_profile.values, y=bin_centers, orientation="h",
+                                 name="Vol Profile", marker_color="rgba(0, 191, 255, 0.45)", showlegend=False),
+                          row=current_row, col=1)
         except Exception:
             pass
         current_row += 1
 
-    # ---- vs BTC ----
     if show_vs_btc and "vs_btc" in h_data.columns:
-        fig.add_trace(
-            go.Scatter(x=h_data.index, y=h_data["vs_btc"], name="vs BTC %", line=dict(color="#00FFAA", width=1.8)),
-            row=current_row, col=1,
-        )
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["vs_btc"], name="vs BTC %",
+                                 line=dict(color="#00FFAA", width=1.8)), row=current_row, col=1)
         fig.add_hline(y=0, line_dash="dash", line_color="gray", row=current_row, col=1)
 
-    # Final layout
     fig.update_layout(
         height=220 + (rows * 150),
         template="plotly_dark",
@@ -755,7 +688,6 @@ show_vwap = st.sidebar.checkbox("VWAP", value=False)
 show_vs_btc = st.sidebar.checkbox("Relative Strength vs BTC", value=False)
 show_onchain = st.sidebar.checkbox("Show On-chain Metrics", value=True)
 
-# Resolve resolution settings
 res_cfg = RESOLUTION_MAP[res_disp]
 interval = res_cfg["interval"]
 lookback_bars = res_cfg["lookback"]
@@ -765,11 +697,11 @@ is_6h = res_cfg["is_6h"]
 st_autorefresh(interval=rf_rate * 1000, key="datarefresh")
 
 # ============================================================
-# 7. MAIN APP LOGIC
+# 7. MAIN APP
 # ============================================================
 
-# ---- OLD ENGLISH TITLE (clearer S characters) ----
-st.markdown('<div class="old-english-title">OneStop-InfoSpot</div>', unsafe_allow_html=True)
+# ---- SHINY SILVER COMIC SANS TITLE ----
+st.markdown('<div class="silver-title">OneStop-InfoSpot</div>', unsafe_allow_html=True)
 
 st.title("📈 Asset Intelligence Terminal")
 st.caption("Dark mode • Candlesticks • Long/Short + OI + Funding • RSI • MACD • Bollinger • On-chain")
@@ -778,7 +710,6 @@ if not tkrs:
     st.info("Enter at least one ticker in the sidebar.")
     st.stop()
 
-# Load data
 data = load_ticker_data(tuple(tkrs), interval, lookback_bars, period, is_6h)
 
 if not data:
@@ -787,7 +718,6 @@ if not data:
 
 daily_pivots = get_daily_pivots(tuple(tkrs))
 
-# Optional BTC data for relative strength
 btc_data = None
 if show_vs_btc:
     if "BTC-USD" in data:
@@ -799,7 +729,6 @@ if show_vs_btc:
         except Exception:
             pass
 
-# Build summary tables
 combined_df = pd.DataFrame()
 matrix_rows = []
 liquidity_profiles = {}
@@ -826,17 +755,10 @@ for t, hist in data.items():
 
     liquidity_profiles[t] = {
         "price": c_px,
-        "100x_l": c_px * 0.99,
-        "50x_l": c_px * 0.98,
-        "25x_l": c_px * 0.96,
-        "100x_s": c_px * 1.01,
-        "50x_s": c_px * 1.02,
-        "25x_s": c_px * 1.04,
-        "longs": long_r,
-        "shorts": short_r,
-        "oi": oi_val,
-        "funding": funding,
-        "source": source_label,
+        "100x_l": c_px * 0.99, "50x_l": c_px * 0.98, "25x_l": c_px * 0.96,
+        "100x_s": c_px * 1.01, "50x_s": c_px * 1.02, "25x_s": c_px * 1.04,
+        "longs": long_r, "shorts": short_r,
+        "oi": oi_val, "funding": funding, "source": source_label,
     }
 
     futures_table_rows.append({
@@ -854,59 +776,38 @@ for t, hist in data.items():
     if t in daily_pivots:
         p = daily_pivots[t]
         matrix_rows.append({
-            "Ticker": t,
-            "Price": f"${c_px:,.2f}",
-            "Change": f"{delta:+.2f}%",
-            "Long %": f"{long_r:.1f}%",
-            "Short %": f"{short_r:.1f}%",
-            "Pivot": f"${p['Pivot']:,.2f}",
-            "S1": f"${p['S1']:,.2f}",
-            "S2": f"${p['S2']:,.2f}",
-            "R1": f"${p['R1']:,.2f}",
-            "R2": f"${p['R2']:,.2f}",
+            "Ticker": t, "Price": f"${c_px:,.2f}", "Change": f"{delta:+.2f}%",
+            "Long %": f"{long_r:.1f}%", "Short %": f"{short_r:.1f}%",
+            "Pivot": f"${p['Pivot']:,.2f}", "S1": f"${p['S1']:,.2f}", "S2": f"${p['S2']:,.2f}",
+            "R1": f"${p['R1']:,.2f}", "R2": f"${p['R2']:,.2f}",
         })
     else:
         matrix_rows.append({
-            "Ticker": t,
-            "Price": f"${c_px:,.2f}",
-            "Change": f"{delta:+.2f}%",
-            "Long %": f"{long_r:.1f}%",
-            "Short %": f"{short_r:.1f}%",
-            "Pivot": "N/A",
-            "S1": "N/A",
-            "S2": "N/A",
-            "R1": "N/A",
-            "R2": "N/A",
+            "Ticker": t, "Price": f"${c_px:,.2f}", "Change": f"{delta:+.2f}%",
+            "Long %": f"{long_r:.1f}%", "Short %": f"{short_r:.1f}%",
+            "Pivot": "N/A", "S1": "N/A", "S2": "N/A", "R1": "N/A", "R2": "N/A",
         })
 
 # ============================================================
 # 8. UI SECTIONS
 # ============================================================
 
-# Comparative Performance
 st.subheader("📊 Comparative Relative Performance")
 if not combined_df.empty:
     fig = go.Figure()
     for col in combined_df.columns:
         fig.add_trace(go.Scatter(x=combined_df.index, y=combined_df[col], name=col))
-    fig.update_layout(
-        height=320,
-        template="plotly_dark",
-        paper_bgcolor="#0e1117",
-        plot_bgcolor="#0e1117",
-        margin=dict(l=10, r=10, t=30, b=10),
-    )
+    fig.update_layout(height=320, template="plotly_dark",
+                      paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
+                      margin=dict(l=10, r=10, t=30, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
-# Asset Analysis Framework
 st.subheader("🔥 Asset Analysis Frameworks")
 m_tgt = st.selectbox("Select Target Asset:", list(liquidity_profiles.keys()))
 
 if m_tgt and m_tgt in data:
     h_data = data[m_tgt].copy()
 
-    # Long-term baseline (optional)
-    long_avg = None
     if show_long_baseline:
         long_avg = get_long_term_avg(m_tgt)
         if long_avg is not None:
@@ -928,30 +829,20 @@ if m_tgt and m_tgt in data:
         btc_data=btc_data,
     )
 
-    # Add long baseline if present
     if show_long_baseline and "long_baseline" in h_data.columns:
         fig.add_trace(
-            go.Scatter(
-                x=h_data.index,
-                y=h_data["long_baseline"],
-                name="1Y Baseline",
-                line=dict(color="#FF8C00", width=1.8, dash="dashdot"),
-            ),
-            row=1,
-            col=1,
+            go.Scatter(x=h_data.index, y=h_data["long_baseline"], name="1Y Baseline",
+                       line=dict(color="#FF8C00", width=1.8, dash="dashdot")),
+            row=1, col=1,
         )
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # Metrics row
     cols = st.columns(5)
     if show_rsi and "rsi" in h_data.columns and not h_data["rsi"].isna().all():
         rsi_val = h_data["rsi"].iloc[-1]
-        cols[0].metric(
-            "RSI",
-            f"{rsi_val:.1f}",
-            "Overbought" if rsi_val > 70 else "Oversold" if rsi_val < 30 else "Neutral",
-        )
+        cols[0].metric("RSI", f"{rsi_val:.1f}",
+                       "Overbought" if rsi_val > 70 else "Oversold" if rsi_val < 30 else "Neutral")
     if show_macd and "macd" in h_data.columns:
         cols[1].metric("MACD", f"{h_data['macd'].iloc[-1]:.2f}")
     if show_bb and "bb_upper" in h_data.columns:
@@ -966,85 +857,49 @@ if m_tgt and m_tgt in data:
     if show_vs_btc and "vs_btc" in h_data.columns:
         cols[4].metric("vs BTC", f"{h_data['vs_btc'].iloc[-1]:+.1f}%")
 
-    # Liquidity Map
     st.markdown("#### 🔥 Liquidity Map (Estimated Liquidation Levels)")
     p = liquidity_profiles[m_tgt]
     st.caption(f"Source of Long/Short: **{p['source']}** | Liquidation levels are estimated")
 
     levels = [p["25x_l"], p["50x_l"], p["100x_l"], p["price"], p["100x_s"], p["50x_s"], p["25x_s"]]
-    labels = [
-        "25x Long Liq", "50x Long Liq", "100x Long Liq",
-        "Current Price",
-        "100x Short Liq", "50x Short Liq", "25x Short Liq",
-    ]
+    labels = ["25x Long Liq", "50x Long Liq", "100x Long Liq", "Current Price",
+              "100x Short Liq", "50x Short Liq", "25x Short Liq"]
     fig_map = go.Figure(go.Bar(x=labels, y=levels, marker=dict(color=levels, colorscale="Portland")))
-    fig_map.update_layout(
-        height=320,
-        template="plotly_dark",
-        paper_bgcolor="#0e1117",
-        plot_bgcolor="#0e1117",
-    )
+    fig_map.update_layout(height=320, template="plotly_dark",
+                          paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
     st.plotly_chart(fig_map, use_container_width=True)
 
-# Real-time Futures Table
 st.subheader("📊 Real-Time Futures Metrics")
 st.caption("Long/Short Account Ratio • Open Interest • Funding Rate")
 if futures_table_rows:
     st.dataframe(pd.DataFrame(futures_table_rows).set_index("Ticker"), use_container_width=True)
 
-# Long vs Short Chart
 st.subheader("📊 Long vs Short Allocation")
 if liquidity_profiles:
     c_as = list(liquidity_profiles.keys())
     fig_c = go.Figure()
-    fig_c.add_trace(
-        go.Bar(
-            x=c_as,
-            y=[liquidity_profiles[k]["longs"] for k in c_as],
-            name="Long %",
-            marker_color="#00FF7F",
-            text=[f"{liquidity_profiles[k]['longs']:.1f}%" for k in c_as],
-            textposition="auto",
-        )
-    )
-    fig_c.add_trace(
-        go.Bar(
-            x=c_as,
-            y=[liquidity_profiles[k]["shorts"] for k in c_as],
-            name="Short %",
-            marker_color="#FF4500",
-            text=[f"{liquidity_profiles[k]['shorts']:.1f}%" for k in c_as],
-            textposition="auto",
-        )
-    )
-    fig_c.update_layout(
-        height=320,
-        barmode="group",
-        template="plotly_dark",
-        paper_bgcolor="#0e1117",
-        plot_bgcolor="#0e1117",
-        yaxis_title="%",
-    )
+    fig_c.add_trace(go.Bar(x=c_as, y=[liquidity_profiles[k]["longs"] for k in c_as],
+                           name="Long %", marker_color="#00FF7F",
+                           text=[f"{liquidity_profiles[k]['longs']:.1f}%" for k in c_as], textposition="auto"))
+    fig_c.add_trace(go.Bar(x=c_as, y=[liquidity_profiles[k]["shorts"] for k in c_as],
+                           name="Short %", marker_color="#FF4500",
+                           text=[f"{liquidity_profiles[k]['shorts']:.1f}%" for k in c_as], textposition="auto"))
+    fig_c.update_layout(height=320, barmode="group", template="plotly_dark",
+                        paper_bgcolor="#0e1117", plot_bgcolor="#0e1117", yaxis_title="%")
     st.plotly_chart(fig_c, use_container_width=True)
 
-# On-chain
 if show_onchain and onchain_profiles:
     st.subheader("🔗 Real On-chain Metrics")
     for ticker, metrics in onchain_profiles.items():
         st.markdown(f"**{ticker}**")
-        st.dataframe(
-            pd.DataFrame(list(metrics.items()), columns=["Metric", "Value"]),
-            use_container_width=True,
-            hide_index=True,
-        )
+        st.dataframe(pd.DataFrame(list(metrics.items()), columns=["Metric", "Value"]),
+                     use_container_width=True, hide_index=True)
 
-# Pivot Matrix
 if matrix_rows:
     st.subheader("🧮 Side-by-Side Pivot Matrix (Daily Pivots)")
     st.caption("Classic Floor Pivots calculated from the previous daily candle")
     st.dataframe(pd.DataFrame(matrix_rows).set_index("Ticker"), use_container_width=True)
 
-# News & Sentiment
 st.markdown("---")
 col1, col2 = st.columns(2)
 
