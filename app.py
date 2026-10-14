@@ -30,7 +30,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("📈 Asset Intelligence Terminal")
-st.caption("Dark mode • Real Long/Short + Open Interest + Funding Rate (Binance/Bybit/OKX) • RSI • MACD • Bollinger • On-chain")
+st.caption("Dark mode • Real Long/Short + Open Interest + Funding Rate (Binance/Bybit/OKX) • RSI • MACD • Bollinger • On-chain • Candlesticks")
 
 # -----------------------------
 # Sidebar
@@ -43,6 +43,7 @@ res_disp = st.sidebar.selectbox("Resolution", ["15min", "1hr", "6hr", "Daily (1d
 rf_rate = st.sidebar.slider("Refresh Rate (Seconds)", 15, 120, 45)
 
 st.sidebar.subheader("Indicators")
+show_candles = st.sidebar.checkbox("Candlestick Chart", value=True)
 show_sma50 = st.sidebar.checkbox("50 SMA", value=True)
 show_sma200 = st.sidebar.checkbox("200 SMA", value=True)
 show_bb = st.sidebar.checkbox("Bollinger Bands (20,2)", value=True)
@@ -565,7 +566,29 @@ if m_tgt:
     fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.02, row_heights=row_heights, subplot_titles=subplot_titles)
     current_row = 1
 
-    fig.add_trace(go.Scatter(x=h_data.index, y=h_data["close"], name="Price", line=dict(color="#00FFFF", width=2)), row=current_row, col=1)
+    # ========== CANDLESTICK / LINE PRICE CHART ==========
+    if show_candles and all(col in h_data.columns for col in ["open", "high", "low", "close"]):
+        fig.add_trace(go.Candlestick(
+            x=h_data.index,
+            open=h_data["open"],
+            high=h_data["high"],
+            low=h_data["low"],
+            close=h_data["close"],
+            name="Price",
+            increasing_line_color="#00FF7F",
+            decreasing_line_color="#FF4500",
+            increasing_fillcolor="#00FF7F",
+            decreasing_fillcolor="#FF4500",
+            line=dict(width=1)
+        ), row=current_row, col=1)
+    else:
+        # Fallback to line chart
+        fig.add_trace(go.Scatter(
+            x=h_data.index, 
+            y=h_data["close"], 
+            name="Price", 
+            line=dict(color="#00FFFF", width=2)
+        ), row=current_row, col=1)
 
     if show_bb:
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["bb_upper"], name="BB Upper", line=dict(color="rgba(255,255,255,0.3)", width=1), showlegend=False), row=current_row, col=1)
@@ -611,7 +634,20 @@ if m_tgt:
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["vs_btc"], name="vs BTC %", line=dict(color="#00FFAA", width=1.8)), row=current_row, col=1)
         fig.add_hline(y=0, line_dash="dash", line_color="gray", row=current_row, col=1)
 
-    fig.update_layout(height=220 + (rows * 150), template="plotly_dark", paper_bgcolor="#0e1117", plot_bgcolor="#0e1117", margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h", y=1.02))
+    fig.update_layout(
+        height=220 + (rows * 150),
+        template="plotly_dark",
+        paper_bgcolor="#0e1117",
+        plot_bgcolor="#0e1117",
+        margin=dict(l=10, r=10, t=40, b=10),
+        legend=dict(orientation="h", y=1.02),
+        xaxis_rangeslider_visible=False   # important for candlesticks
+    )
+    
+    # Also hide rangeslider on all x-axes in subplots
+    for i in range(1, rows + 1):
+        fig.update_xaxes(rangeslider_visible=False, row=i, col=1)
+
     st.plotly_chart(fig, use_container_width=True)
 
     cols = st.columns(5)
