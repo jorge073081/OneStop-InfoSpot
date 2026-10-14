@@ -30,7 +30,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("📈 Asset Intelligence Terminal")
-st.caption("Dark mode • Real Long/Short + Open Interest + Funding Rate from Binance • RSI • MACD • Bollinger • On-chain")
+st.caption("Dark mode • Real Long/Short + Open Interest + Funding Rate • RSI • MACD • Bollinger • On-chain")
 
 # -----------------------------
 # Sidebar
@@ -295,62 +295,118 @@ def get_real_onchain(ticker: str):
 
     return {"Note": f"No free on-chain data found for {t}", "Source": "Free endpoints only"}
 
-# ---------- Improved Binance Futures Metrics (Long/Short + OI + Funding) ----------
+# ---------- Multi-exchange Futures Metrics (Binance → Bybit → OKX) ----------
 @st.cache_data(ttl=60)
 def get_binance_futures_metrics(ticker: str):
     t = ticker.upper().replace("-USD", "").replace("USDT", "").replace("USD", "").strip()
-    possible_symbols = [f"{t}USDT", f"{t}USD", t]
+    symbol = f"{t}USDT"
     
     result = {
-        "source": "Simulated (no Binance data)",
+        "source": "Simulated (no exchange data)",
         "long_pct": 50.0,
         "short_pct": 50.0,
         "oi": None,
         "funding_rate": None
     }
-    
-    for symbol in possible_symbols:
-        try:
-            # Long/Short Ratio
-            for period in ["1h", "5m", "15m"]:
-                url_ls = f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol={symbol}&period={period}&limit=1"
-                r = requests.get(url_ls, headers=HEADERS, timeout=8)
-                if r.status_code == 200:
-                    data = r.json()
-                    if isinstance(data, list) and len(data) > 0:
-                        item = data[0]
-                        long_account = float(item.get("longAccount", 0.5))
-                        short_account = float(item.get("shortAccount", 0.5))
-                        total = long_account + short_account
-                        if total > 0:
-                            result["long_pct"] = round((long_account / total) * 100, 1)
-                            result["short_pct"] = round((short_account / total) * 100, 1)
-                            result["source"] = f"Binance Global L/S ({period})"
-                            break
+
+    # 1. Try Binance
+    try:
+        r = requests.get(
+            f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol={symbol}&period=1h&limit=1",
+            headers=HEADERS, timeout=8
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if data:
+                long_acc = float(data[0].get("longAccount", 0.5))
+                short_acc = float(data[0].get("shortAccount", 0.5))
+                total = long_acc + short_acc
+                if total > 0:
+                    result["long_pct"] = round(long_acc / total * 100, 1)
+                    result["short_pct"] = round(short_acc / total * 100, 1)
+                    result["source"] = "Binance"
+        
+        r2 = requests.get(f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}", headers=HEADERS, timeout=8)
+        if r2.status_code == 200:
+            oi = float(r2.json().get("openInterest", 0))
+            if oi > 0:
+                result["oi"] = oi
+        
+        r3 = requests.get(f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={symbol}", headers=HEADERS, timeout=8)
+        if r3.status_code == 200:
+            fr = float(r3.json().get("lastFundingRate", 0))
+            result["funding_rate"] = fr * 100
             
-            # Open Interest
-            url_oi = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}"
-            r2 = requests.get(url_oi, headers=HEADERS, timeout=8)
-            if r2.status_code == 200:
-                oi_data = r2.json()
-                oi_val = float(oi_data.get("openInterest", 0))
-                if oi_val > 0:
-                    result["oi"] = oi_val
-            
-            # Funding Rate
-            url_fund = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={symbol}"
-            r3 = requests.get(url_fund, headers=HEADERS, timeout=8)
-            if r3.status_code == 200:
-                fund_data = r3.json()
-                fr = float(fund_data.get("lastFundingRate", 0))
-                result["funding_rate"] = fr * 100  # convert to %
-            
-            if "Binance" in result["source"]:
-                break
+        if result["source"] == "Binance":
+            return result
+    except Exception:
+        pass
+
+    # 2. Try Bybit
+    try:
+        r = requests.get(
+            f"https://api.bybit.com/v5/market/account-ratio?category=linear&symbol={symbol}&period=1h&limit=1",
+            headers=HEADERS, timeout=8
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("retCode") == 0 and data.get("result", {}).get("list"):
+                item = data["result"]["list"][0]
+                buy_ratio = float(item.get("buyRatio", 0.5))
+                sell_ratio = float(item.get("sellRatio", 0.5))
+                total = buy_ratio + sell_ratio
+                if total > 0:
+                    result["long_pct"] = round(buy_ratio / total * 100, 1)
+                    result["short_pct"] = round(sell_ratio / total * 100, 1)
+                    result["source"] = "Bybit"
+        
+        r2 = requests.get(
+            f"https://api.bybit.com/v5/market/open-interest?category=linear&symbol={symbol}&intervalTime=1h&limit=1",
+            headers=HEADERS, timeout=8
+        )
+        if r2.status_code == 200:
+            data = r2.json()
+            if data.get("retCode") == 0 and data.get("result", {}).get("list"):
+                oi = float(data["result"]["list"][0].get("openInterest", 0))
+                if oi > 0:
+                    result["oi"] = oi
+        
+        r3 = requests.get(
+            f"https://api.bybit.com/v5/market/funding/history?category=linear&symbol={symbol}&limit=1",
+            headers=HEADERS, timeout=8
+        )
+        if r3.status_code == 200:
+            data = r3.json()
+            if data.get("retCode") == 0 and data.get("result", {}).get("list"):
+                fr = float(data["result"]["list"][0].get("fundingRate", 0))
+                result["funding_rate"] = fr * 100
                 
-        except Exception:
-            continue
-    
+        if result["source"] == "Bybit":
+            return result
+    except Exception:
+        pass
+
+    # 3. Try OKX
+    try:
+        r = requests.get(
+            f"https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio?ccy={t}&period=1H",
+            headers=HEADERS, timeout=8
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("code") == "0" and data.get("data"):
+                item = data["data"][0]
+                ratio = float(item[1]) if len(item) > 1 else 1.0
+                long_pct = round(ratio / (1 + ratio) * 100, 1)
+                result["long_pct"] = long_pct
+                result["short_pct"] = round(100 - long_pct, 1)
+                result["source"] = "OKX"
+                
+        if result["source"] == "OKX":
+            return result
+    except Exception:
+        pass
+
     return result
 
 # -----------------------------
@@ -395,7 +451,6 @@ for t, hist in data.items():
     p_px = float(hist["close"].iloc[-2]) if len(hist) > 1 else c_px
     delta = ((c_px - p_px) / p_px) * 100
 
-    # Real Futures Data
     fut = get_binance_futures_metrics(t)
     long_r = fut["long_pct"]
     short_r = fut["short_pct"]
@@ -413,7 +468,6 @@ for t, hist in data.items():
         "source": source_label
     }
 
-    # For the futures table
     futures_table_rows.append({
         "Ticker": t,
         "Long %": f"{long_r:.1f}%",
@@ -441,9 +495,7 @@ for t, hist in data.items():
             "Pivot": "N/A", "S1": "N/A", "S2": "N/A", "R1": "N/A", "R2": "N/A"
         })
 
-# -----------------------------
 # Charts
-# -----------------------------
 st.subheader("📊 Comparative Relative Performance")
 fig = go.Figure()
 for col in combined_df.columns:
@@ -554,7 +606,6 @@ if m_tgt:
     if show_vs_btc and "vs_btc" in h_data.columns:
         cols[4].metric("vs BTC", f"{h_data['vs_btc'].iloc[-1]:+.1f}%")
 
-    # Liquidity Map
     st.markdown("#### 🔥 Liquidity Map (Estimated Liquidation Levels)")
     p = liquidity_profiles[m_tgt]
     st.caption(f"Source of Long/Short: **{p['source']}** | Liquidation levels are estimated")
@@ -566,11 +617,11 @@ if m_tgt:
     st.plotly_chart(fig_map, use_container_width=True)
 
 # Real-time Futures Table
-st.subheader("📊 Real-Time Futures Metrics (Binance)")
-st.caption("Long/Short Account Ratio • Open Interest • Funding Rate (updated ~every minute)")
+st.subheader("📊 Real-Time Futures Metrics")
+st.caption("Long/Short Account Ratio • Open Interest • Funding Rate")
 st.dataframe(pd.DataFrame(futures_table_rows).set_index("Ticker"), use_container_width=True)
 
-# Leverage Allocation Chart
+# Long vs Short Chart
 st.subheader("📊 Long vs Short Allocation")
 c_as = list(liquidity_profiles.keys())
 fig_c = go.Figure()
