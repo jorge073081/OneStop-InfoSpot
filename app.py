@@ -183,7 +183,6 @@ def normalize_columns(df: pd.DataFrame, target_ticker: Optional[str] = None) -> 
     
     df = df.copy()
     
-    # Handle yfinance multi-index layouts gracefully
     if isinstance(df.columns, pd.MultiIndex):
         if target_ticker and target_ticker in df.columns.get_level_values(1):
             df = df.xs(target_ticker, axis=1, level=1)
@@ -332,8 +331,8 @@ def get_fear_greed() -> Tuple[str, str]:
         return "N/A", "Unavailable"
 
 
-@st.cache_data(ttl=300)
-def get_crypto_news(max_items: int = 12) -> List[Dict]:
+@st.cache_data(ttl=60)
+def get_crypto_news(cache_buster: str, max_items: int = 12) -> List[Dict]:
     feeds = {
         "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
         "CoinTelegraph": "https://cointelegraph.com/rss",
@@ -342,7 +341,12 @@ def get_crypto_news(max_items: int = 12) -> List[Dict]:
     articles = []
     for source, url in feeds.items():
         try:
-            feed = feedparser.parse(url)
+            # Force target news networks to serve uncached live payloads bypassing CDNs
+            feed = feedparser.parse(url, request_headers={
+                'User-Agent': HEADERS['User-Agent'],
+                'Cache-Control': 'max-age=0, no-cache',
+                'Pragma': 'no-cache'
+            })
             for entry in feed.entries[:5]:
                 published = entry.get("published", entry.get("updated", "Unknown"))
                 summary = entry.get("summary", "")
@@ -1036,7 +1040,9 @@ with tab_crypto:
 
             with col1:
                 st.subheader("📰 Live Crypto News")
-                news = get_crypto_news()
+                # Using the current minute/second as a unique cache buster pulse key to ensure true live retrieval
+                pulse_key = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')
+                news = get_crypto_news(cache_buster=pulse_key)
                 if news:
                     sia = SIA()
                     for art in news:
