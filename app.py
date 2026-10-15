@@ -332,37 +332,67 @@ def get_fear_greed() -> Tuple[str, str]:
         return "N/A", "Unavailable"
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=90, show_spinner="Fetching fresh crypto news...")
 def get_crypto_news(cache_buster: str, max_items: int = 12) -> List[Dict]:
     feeds = {
         "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
         "CoinTelegraph": "https://cointelegraph.com/rss",
         "Decrypt": "https://decrypt.co/feed",
+        "The Block": "https://www.theblock.co/rss.xml",
+        "CryptoSlate": "https://cryptoslate.com/feed/",
     }
+
     articles = []
+
     for source, url in feeds.items():
         try:
-            resp = requests.get(url, headers=HEADERS, timeout=10)
+            resp = requests.get(url, headers=HEADERS, timeout=12)
             if resp.status_code != 200:
                 continue
-            
-            feed_data = io.BytesIO(resp.content)
-            feed = feedparser.parse(feed_data)
-            for entry in feed.entries[:5]:
-                published = entry.get("published", entry.get("updated", "Unknown"))
-                summary = entry.get("summary", "")
+
+            feed = feedparser.parse(io.BytesIO(resp.content))
+
+            for entry in feed.entries[:6]:
+                # Prefer structured datetime from feedparser
+                published_struct = entry.get("published_parsed") or entry.get("updated_parsed")
+                if published_struct:
+                    try:
+                        pub_dt = pd.Timestamp(*published_struct[:6], tz="UTC")
+                    except Exception:
+                        pub_dt = pd.Timestamp.utcnow()
+                else:
+                    # Fallback string parse
+                    raw = entry.get("published") or entry.get("updated") or ""
+                    try:
+                        pub_dt = pd.to_datetime(raw, utc=True)
+                    except Exception:
+                        pub_dt = pd.Timestamp.utcnow()
+
+                summary = entry.get("summary", "") or entry.get("description", "")
                 if summary:
-                    summary = summary.replace("<p>", "").replace("</p>", "")[:260] + "..."
+                    # Clean basic HTML
+                    summary = (
+                        summary.replace("<p>", "")
+                        .replace("</p>", "")
+                        .replace("<br>", " ")
+                        .replace("<br/>", " ")
+                    )
+                    summary = summary[:280] + ("..." if len(summary) > 280 else "")
+
                 articles.append({
-                    "title": entry.get("title", "No title"),
+                    "title": entry.get("title", "No title").strip(),
                     "link": entry.get("link", "#"),
                     "source": source,
-                    "published": published,
+                    "published": pub_dt.strftime("%Y-%m-%d %H:%M UTC"),
+                    "published_dt": pub_dt,          # for sorting
                     "summary": summary,
                 })
         except Exception:
             continue
-    return sorted(articles, key=lambda x: x["published"], reverse=True)[:max_items]
+
+    # Sort newest first using real datetime
+    articles = sorted(articles, key=lambda x: x["published_dt"], reverse=True)
+    return articles[:max_items]
 
 
 @st.cache_data(ttl=90)
@@ -420,37 +450,85 @@ def get_real_onchain(ticker: str) -> Dict[str, Any]:
     return {"Note": f"No free on-chain data found for {t}", "Source": "Free endpoints only"}
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=45)
 def get_futures_metrics(ticker: str, current_price: float = 0.0) -> Dict[str, Any]:
     t = ticker.upper().replace("-USD", "").replace("USDT", "").replace("USD", "").strip()
+    symbol = f"{t}USDT"
+
     result = {
-        "source": "US Cloud Telemetry Framework (Proxy Loop)",
-        "long_pct": 50.0,
-        "short_pct": 50.0,
+        "source": "N/A",
+        "long_pct": None,
+        "short_pct": None,
         "oi": None,
         "funding_rate": None,
     }
 
+    # 1) Bybit – Open Interest + Funding Rate
     try:
-        r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={t}USDT", headers=HEADERS, timeout=6).json()
+        r = requests.get(
+            f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={symbol}",
+            headers=HEADERS,
+            timeout=8,
+        ).json()
         if r.get("retCode") == 0 and r.get("result", {}).get("list"):
-            target_data = r["result"]["list"][0]
-            result["oi"] = safe_float(target_data.get("openInterest"))
-            result["funding_rate"] = safe_float(target_data.get("fundingRate")) * 100
-            result["source"] = "Bybit Global Telemetry Engine"
+            data = r["result"]["list"][0]
+            result["oi"] = safe_float(data.get("openInterest"))
+            fr = safe_float(data.get("fundingRate"))
+            if fr is not None:
+                result["funding_rate"] = fr * 100  # to percent
+            result["source"] = "Bybit"
     except Exception:
         pass
 
-    if current_price > 0:
-        np.random.seed(int(current_price) % 55555)
-        price_seed = (current_price % 20) / 20.0
-        random_wobble = np.random.uniform(-2.5, 2.5)
-        result["long_pct"] = round(52.1 + (price_seed * 3.5) + random_wobble, 1)
-        result["short_pct"] = round(100.0 - result["long_pct"], 1)
-        if not result["oi"]:
-            result["oi"] = (current_price * np.random.randint(6000, 18000)) / 12
-        if not result["funding_rate"]:
-            result["funding_rate"] = np.random.choice([0.0100, 0.0150, -0.0050, 0.0200])
+    # 2) Bybit – Real Long/Short Account Ratio
+    try:
+        r = requests.get(
+            f"https://api.bybit.com/v5/market/account-ratio"
+            f"?category=linear&symbol={symbol}&period=1h&limit=1",
+            headers=HEADERS,
+            timeout=8,
+        ).json()
+        if r.get("retCode") == 0 and r.get("result", {}).get("list"):
+            row = r["result"]["list"][0]
+            buy = safe_float(row.get("buyRatio"))
+            sell = safe_float(row.get("sellRatio"))
+            if buy is not None and sell is not None and (buy + sell) > 0:
+                total = buy + sell
+                result["long_pct"] = round(buy / total * 100, 1)
+                result["short_pct"] = round(sell / total * 100, 1)
+                result["source"] = "Bybit (Account Ratio)"
+    except Exception:
+        pass
+
+    # 3) Fallback – Binance Global Long/Short Account Ratio
+    if result["long_pct"] is None:
+        try:
+            r = requests.get(
+                f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio"
+                f"?symbol={symbol}&period=5m&limit=1",
+                headers=HEADERS,
+                timeout=8,
+            ).json()
+            if isinstance(r, list) and len(r) > 0:
+                row = r[0]
+                long_acc = safe_float(row.get("longAccount"))
+                short_acc = safe_float(row.get("shortAccount"))
+                if long_acc is not None and short_acc is not None:
+                    result["long_pct"] = round(long_acc * 100, 1)
+                    result["short_pct"] = round(short_acc * 100, 1)
+                    if result["source"] == "N/A":
+                        result["source"] = "Binance"
+                    else:
+                        result["source"] += " + Binance L/S"
+        except Exception:
+            pass
+
+    # Final safety – only if both exchanges failed
+    if result["long_pct"] is None:
+        result["long_pct"] = 50.0
+        result["short_pct"] = 50.0
+        result["source"] = (result["source"] or "N/A") + " (L/S fallback 50/50)"
+
     return result
 
 
@@ -871,7 +949,8 @@ with tab_crypto:
 
             with col1:
                 st.subheader("📰 Live Crypto News")
-                pulse_key = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')
+                # More aggressive cache buster (seconds) so news refreshes properly
+                pulse_key = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
                 news = get_crypto_news(cache_buster=pulse_key)
                 if news:
                     sia = SIA()
@@ -895,6 +974,8 @@ with tab_crypto:
                             </div>
                             """
                             st.markdown(html_body, unsafe_allow_html=True)
+                else:
+                    st.info("No news articles available right now. Try refreshing.")
 
             with col2:
                 st.subheader("📊 Sentiment")
