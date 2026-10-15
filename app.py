@@ -315,7 +315,10 @@ def get_fear_greed() -> Tuple[str, str]:
     try:
         res = requests.get("https://api.alternative.me/fng/", headers=HEADERS, timeout=8).json()
         data = res["data"]
-        return data["value"], data["value_classification"]
+        # FIXED: alternative.me returns a list under the 'data' key. Extract index 0 safely.
+        if isinstance(data, list) and len(data) > 0:
+            return data[0]["value"], data[0]["value_classification"]
+        return "N/A", "Unavailable"
     except Exception:
         return "N/A", "Unavailable"
 
@@ -560,8 +563,14 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r.status_code == 200:
             data = r.json()
             if data.get("code") == "0" and data.get("data"):
-                item = data["data"][0] # FIXED: Select inner dictionary index 
-                ratio = safe_float(item if len(item) > 1 else 1.0)
+                # FIXED: Handle OKX response properly as it can be a list of lists or lists of dicts
+                item = data["data"][0]
+                if isinstance(item, list) and len(item) > 1:
+                    ratio = safe_float(item[1])
+                elif isinstance(item, dict):
+                    ratio = safe_float(item.get("ratio", 1.0))
+                else:
+                    ratio = safe_float(item, 1.0)
                 long_pct = round(ratio / (1 + ratio) * 100, 1)
                 result["long_pct"] = long_pct
                 result["short_pct"] = round(100 - long_pct, 1)
