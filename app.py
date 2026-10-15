@@ -36,7 +36,7 @@ st.markdown(
         [data-testid="stMetricLabel"],
         [data-testid="stSidebar"],
         button, .stButton > button,
-        .stCaption, .stExpander {
+        .stCaption {
             font-family: 'Playfair Display', serif !important;
         }
 
@@ -50,13 +50,51 @@ st.markdown(
             padding-top: 1.2rem !important;
         }
 
-        /* Fix text overlapping inside st.expander elements due to custom typography overrides */
-        .stExpander div, .stExpander p, .stExpander span {
+        /* Fix Live Crypto News overlapping & separate the 'Read →' link */
+        .stExpander, .stExpander div, .stExpander p, .stExpander span {
+            font-family: 'Playfair Display', serif !important;
             line-height: 1.6 !important;
-            margin-bottom: 0.5rem !important;
+        }
+        .stExpander p {
+            margin-bottom: 0.8rem !important;
+        }
+        .crypto-news-link {
+            display: inline-block !important;
+            margin-top: 0.7rem !important;
+            padding: 4px 8px !important;
+            background-color: #1a1d24 !important;
+            color: #00FFFF !important;
+            border-radius: 4px !important;
+            text-decoration: none !important;
+            border: 1px solid #30363d !important;
+        }
+        .crypto-news-link:hover {
+            background-color: #30363d !important;
+            color: #ffffff !important;
         }
 
-        /* Main Title - Playfair Display Font */
+        /* Fix Top Left Control Panel Expand Button */
+        [data-testid="collapsedControlSidebar"] button {
+            background-color: #1a1d24 !important;
+            border: 1px solid #30363d !important;
+            border-radius: 6px !important;
+            padding: 0.5rem 1rem !important;
+            color: #fafafa !important;
+            font-family: 'Playfair Display', serif !important;
+            font-weight: 600 !important;
+            box-shadow: 0px 4px 10px rgba(0,0,0,0.3) !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            transition: all 0.2s ease !important;
+        }
+        [data-testid="collapsedControlSidebar"] button:hover {
+            background-color: #30363d !important;
+            border-color: #00FF7F !important;
+            cursor: pointer !important;
+        }
+
+        /* Main Title - Playfair Font instead of Script to match rules */
         .silver-title {
             font-family: 'Playfair Display', serif !important;
             font-size: 3.8rem;
@@ -81,7 +119,7 @@ st.markdown(
                     drop-shadow(0 0 12px rgba(255, 255, 255, 0.3));
         }
 
-        /* Subtitle - Playfair Display Font */
+        /* Subtitle */
         .silver-subtitle {
             font-family: 'Playfair Display', serif !important;
             font-size: 2.1rem;
@@ -386,13 +424,13 @@ def get_real_onchain(ticker: str) -> Dict[str, Any]:
         pass
 
     try:
-        slug_map = {
+        cg_ids = {
             "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "XRP": "ripple",
             "ADA": "cardano", "AVAX": "avalanche-2", "DOT": "polkadot", "DOGE": "dogecoin",
             "LINK": "chainlink", "ONDO": "ondo-finance", "NEAR": "near", "ATOM": "cosmos",
             "SUI": "sui", "APT": "aptos",
         }
-        cg_id = slug_map.get(t, t.lower())
+        cg_id = cg_ids.get(t, t.lower())
         url = (
             f"https://api.coingecko.com/api/v3/simple/price"
             f"?ids={cg_id}&vs_currencies=usd&include_market_cap=true&include_24hr_vol=true"
@@ -646,7 +684,7 @@ def build_asset_chart(
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["sma200"], name="SMA 200",
                                  line=dict(color="#FF4500", width=1.5)), row=current_row, col=1)
     if show_baseline and "baseline" in h_data.columns:
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["baseline"], name="Hist. Baseline (Avg)",
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["baseline"], name="Hist. Baseline (Period Avg)",
                                  line=dict(color="#FFD700", width=1.8, dash="dot")), row=current_row, col=1)
     if show_vwap and "vwap" in h_data.columns:
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["vwap"], name="VWAP",
@@ -966,7 +1004,9 @@ with col1:
                     st.error(f"Bearish ({score:+.2f})")
                 else:
                     st.info(f"Neutral ({score:+.2f})")
-                st.markdown(f"[Read →]({art['link']})")
+                
+                # Render clean clickable element completely un-impacted by global line-height text bounds
+                st.markdown(f'<a href="{art["link"]}" target="_blank" class="crypto-news-link">Open Article ↗</a>', unsafe_allow_html=True)
 
 with col2:
     st.subheader("📊 Sentiment")
