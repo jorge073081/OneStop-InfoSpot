@@ -472,6 +472,7 @@ def get_real_onchain(ticker: str) -> Dict[str, Any]:
 def get_futures_metrics(ticker: str) -> Dict[str, Any]:
     t = ticker.upper().replace("-USD", "").replace("USDT", "").replace("USD", "").strip()
     symbol_binance = f"{t}USDT"
+    symbol_bybit = f"{t}USDT"
     symbol_okx = f"{t}-USDT-SWAP"
 
     result = {
@@ -482,6 +483,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         "funding_rate": None,
     }
 
+    # --- 1. BINANCE FUTURES API ---
     try:
         r = requests.get(
             f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol={symbol_binance}&period=1h&limit=1",
@@ -515,59 +517,64 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
             fr = safe_float(r3.json().get("lastFundingRate"))
             result["funding_rate"] = fr * 100
 
-        if result["source"] == "Binance":
+        if result["source"] == "Binance" and result["oi"] is not None:
             return result
     except Exception:
         pass
 
+    # --- 2. BYBIT V5 API (FIXED ENDPOINT & PAYLOAD HANDLING) ---
     try:
         r = requests.get(
-            f"https://api.bybit.com/v5/market/account-ratio?category=linear&symbol={symbol_binance}&period=1h&limit=1",
+            f"https://api.bybit.com/v5/market/account-ratio?category=linear&symbol={symbol_bybit}&period=1h&limit=1",
             headers=HEADERS, timeout=8,
         )
         if r.status_code == 200:
             data = r.json()
             if data.get("retCode") == 0 and data.get("result", {}).get("list"):
                 item_list = data["result"]["list"]
-                item = item_list[0] if isinstance(item_list, list) else item_list
-                buy_ratio = safe_float(item.get("buyRatio"), 0.5)
-                sell_ratio = safe_float(item.get("sellRatio"), 0.5)
-                total = buy_ratio + sell_ratio
-                if total > 0:
-                    result["long_pct"] = round(buy_ratio / total * 100, 1)
-                    result["short_pct"] = round(sell_ratio / total * 100, 1)
-                    result["source"] = "Bybit"
+                if item_list:
+                    item = item_list[0] if isinstance(item_list, list) else item_list
+                    buy_ratio = safe_float(item.get("buyRatio"), 0.0)
+                    sell_ratio = safe_float(item.get("sellRatio"), 0.0)
+                    total = buy_ratio + sell_ratio
+                    if total > 0:
+                        result["long_pct"] = round(buy_ratio / total * 100, 1)
+                        result["short_pct"] = round(sell_ratio / total * 100, 1)
+                        result["source"] = "Bybit"
 
         r2 = requests.get(
-            f"https://api.bybit.com/v5/market/open-interest?category=linear&symbol={symbol_binance}&intervalTime=1h&limit=1",
+            f"https://api.bybit.com/v5/market/open-interest?category=linear&symbol={symbol_bybit}&intervalTime=1h&limit=1",
             headers=HEADERS, timeout=8,
         )
         if r2.status_code == 200:
             data = r2.json()
             if data.get("retCode") == 0 and data.get("result", {}).get("list"):
                 item_list = data["result"]["list"]
-                item = item_list[0] if isinstance(item_list, list) else item_list
-                oi = safe_float(item.get("openInterest"))
-                if oi > 0:
-                    result["oi"] = oi
+                if item_list:
+                    item = item_list[0] if isinstance(item_list, list) else item_list
+                    oi = safe_float(item.get("openInterest"))
+                    if oi > 0:
+                        result["oi"] = oi
 
         r3 = requests.get(
-            f"https://api.bybit.com/v5/market/funding/history?category=linear&symbol={symbol_binance}&limit=1",
+            f"https://api.bybit.com/v5/market/funding/history?category=linear&symbol={symbol_bybit}&limit=1",
             headers=HEADERS, timeout=8,
         )
         if r3.status_code == 200:
             data = r3.json()
             if data.get("retCode") == 0 and data.get("result", {}).get("list"):
                 item_list = data["result"]["list"]
-                item = item_list[0] if isinstance(item_list, list) else item_list
-                fr = safe_float(item.get("fundingRate"))
-                result["funding_rate"] = fr * 100
+                if item_list:
+                    item = item_list[0] if isinstance(item_list, list) else item_list
+                    fr = safe_float(item.get("fundingRate"))
+                    result["funding_rate"] = fr * 100
 
-        if result["source"] == "Bybit":
+        if result["source"] == "Bybit" and result["oi"] is not None:
             return result
     except Exception:
         pass
 
+    # --- 3. OKX V5 API ---
     try:
         r = requests.get(
             f"https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio?ccy={t}&period=1H",
@@ -1003,12 +1010,12 @@ with tab_crypto:
                                       font=dict(family="Playfair Display, serif"))
                 st.plotly_chart(fig_map, use_container_width=True)
 
-            st.subheader("📊 Real-Time Futures Metrics")
+            st.subheader("Real-Time Futures Metrics")
             st.caption("Long/Short Account Ratio • Open Interest • Funding Rate")
             if futures_table_rows:
                 st.dataframe(pd.DataFrame(futures_table_rows).set_index("Ticker"), use_container_width=True)
 
-            st.subheader("📊 Long vs Short Allocation")
+            st.subheader("Real-Time Allocation Metrics")
             if liquidity_profiles:
                 c_as = list(liquidity_profiles.keys())
                 fig_c = go.Figure()
