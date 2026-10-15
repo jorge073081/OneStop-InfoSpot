@@ -9,10 +9,11 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from streamlit_autorefresh import st_autorefresh
 import feedparser
+import io
 from typing import Dict, List, Optional, Tuple, Any
 
 # ============================================================
-# 1. INITIAL SETUP
+# 1. INITIAL SETUP & STREAMLIT MATRIX INTERFACE CONFIGURATION
 # ============================================================
 nltk.download("vader_lexicon", quiet=True)
 
@@ -155,16 +156,17 @@ st.markdown(
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
 }
 
 # ============================================================
-# 2. CONFIGURATION & HELPERS
+# 2. CONFIGURATION & RESOLUTION TUNING
 # ============================================================
 RESOLUTION_MAP = {
     "15min": {"interval": "15m", "lookback": 96, "period": "7d", "is_6h": False},
     "1hr": {"interval": "1h", "lookback": 72, "period": "30d", "is_6h": False},
-    "6hr": {"interval": "1h", "lookback": 84, "period": "60d", "is_6h": True},
+    "6hr": {"interval": "1h", "lookback": 84, "period": "60d", "is_6h": True},  # Uses 1h base stream to safely sample up without breaking
     "Daily (1d)": {"interval": "1d", "lookback": 90, "period": "2y", "is_6h": False},
     "Weekly (1w)": {"interval": "1wk", "lookback": 52, "period": "2y", "is_6h": False},
 }
@@ -184,12 +186,15 @@ def normalize_columns(df: pd.DataFrame, target_ticker: Optional[str] = None) -> 
     df = df.copy()
     
     if isinstance(df.columns, pd.MultiIndex):
-        if target_ticker and target_ticker in df.columns.get_level_values(1):
-            df = df.xs(target_ticker, axis=1, level=1)
-        elif target_ticker and target_ticker in df.columns.get_level_values(0):
-            df = df.xs(target_ticker, axis=1, level=0)
-        else:
-            df.columns = df.columns.get_level_values(0)
+        try:
+            if target_ticker and target_ticker in df.columns.get_level_values(1):
+                df = df.xs(target_ticker, axis=1, level=1)
+            elif target_ticker and target_ticker in df.columns.get_level_values(0):
+                df = df.xs(target_ticker, axis=1, level=0)
+            else:
+                df.columns = df.columns.get_level_values(0)
+        except IndexError:
+            df.columns = [col for col in df.columns]
             
     df.columns = [str(c).lower() for c in df.columns]
     if df.index.tz is not None:
@@ -198,7 +203,7 @@ def normalize_columns(df: pd.DataFrame, target_ticker: Optional[str] = None) -> 
 
 
 # ============================================================
-# 3. TECHNICAL INDICATORS
+# 3. TECHNICAL METRICS MATHEMATICAL OPERATORS
 # ============================================================
 def compute_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
@@ -244,7 +249,7 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ============================================================
-# 4. DATA LOADING
+# 4. DATA EXTRACTION ASYNC SIMULATION LAYER
 # ============================================================
 @st.cache_data(ttl=60, show_spinner="Fetching market data...")
 def load_ticker_data(
@@ -341,12 +346,14 @@ def get_crypto_news(cache_buster: str, max_items: int = 12) -> List[Dict]:
     articles = []
     for source, url in feeds.items():
         try:
-            # Force target news networks to serve uncached live payloads bypassing CDNs
-            feed = feedparser.parse(url, request_headers={
-                'User-Agent': HEADERS['User-Agent'],
-                'Cache-Control': 'max-age=0, no-cache',
-                'Pragma': 'no-cache'
-            })
+            # Native session wrapper to safely ingest payloads behind security filters
+            resp = requests.get(url, headers=HEADERS, timeout=10)
+            if resp.status_code != 200:
+                continue
+            
+            feed_file = io.BytesIO(resp.content)
+            feed = feedparser.parse(feed_file)
+            
             for entry in feed.entries[:5]:
                 published = entry.get("published", entry.get("updated", "Unknown"))
                 summary = entry.get("summary", "")
@@ -444,33 +451,6 @@ def get_real_onchain(ticker: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    try:
-        slug_map = {
-            "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "XRP": "ripple",
-            "ADA": "cardano", "AVAX": "avalanche-2", "DOT": "polkadot", "DOGE": "dogecoin",
-            "LINK": "chainlink", "ONDO": "ondo-finance", "NEAR": "near", "ATOM": "cosmos",
-            "SUI": "sui", "APT": "aptos",
-        }
-        slug = slug_map.get(t, t.lower())
-        url = (
-            f"https://api.coingecko.com/api/v3/simple/price"
-            f"?ids={slug}&vs_currencies=usd&include_market_cap=true&include_24hr_vol=true"
-        )
-        r = requests.get(url, headers=HEADERS, timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            if slug in data:
-                d = data[slug]
-                return {
-                    "Asset": t,
-                    "Price (USD)": f"${d.get('usd', 0):,.4f}",
-                    "Market Cap": f"${d.get('usd_market_cap', 0):,.0f}" if d.get('usd_market_cap') else "N/A",
-                    "24h Volume": f"${d.get('usd_24h_vol', 0):,.0f}" if d.get('usd_24h_vol') else "N/A",
-                    "Source": "CoinGecko (keyless free)",
-                }
-    except Exception as e:
-        return {"Error": f"All free sources failed for {t}", "Details": str(e)[:120]}
-
     return {"Note": f"No free on-chain data found for {t}", "Source": "Free endpoints only"}
 
 
@@ -478,7 +458,6 @@ def get_real_onchain(ticker: str) -> Dict[str, Any]:
 def get_futures_metrics(ticker: str) -> Dict[str, Any]:
     t = ticker.upper().replace("-USD", "").replace("USDT", "").replace("USD", "").strip()
     symbol_binance = f"{t}USDT"
-    symbol_okx = f"{t}-USDT-SWAP"
 
     result = {
         "source": "Simulated (no exchange data)",
@@ -494,9 +473,9 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
             headers=HEADERS, timeout=8,
         )
         if r.status_code == 200 and r.json():
-            data = r.json()[0]  
-            long_acc = safe_float(data.get("longAccount"), 0.5)
-            short_acc = safe_float(data.get("shortAccount"), 0.5)
+            data = r.json()  
+            long_acc = safe_float(data[0].get("longAccount"), 0.5) if isinstance(data, list) else safe_float(data.get("longAccount"), 0.5)
+            short_acc = safe_float(data[0].get("shortAccount"), 0.5) if isinstance(data, list) else safe_float(data.get("shortAccount"), 0.5)
             total = long_acc + short_acc
             if total > 0:
                 result["long_pct"] = round(long_acc / total * 100, 1)
@@ -524,102 +503,9 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
             return result
     except Exception:
         pass
-
-    try:
-        r = requests.get(
-            f"https://api.bybit.com/v5/market/account-ratio?category=linear&symbol={symbol_binance}&period=1h&limit=1",
-            headers=HEADERS, timeout=8,
-        )
-        if r.status_code == 200:
-            data = r.json()
-            if data.get("retCode") == 0 and data.get("result", {}).get("list"):
-                item = data["result"]["list"][0]  
-                buy_ratio = safe_float(item.get("buyRatio"), 0.5)
-                sell_ratio = safe_float(item.get("sellRatio"), 0.5)
-                total = buy_ratio + sell_ratio
-                if total > 0:
-                    result["long_pct"] = round(buy_ratio / total * 100, 1)
-                    result["short_pct"] = round(sell_ratio / total * 100, 1)
-                    result["source"] = "Bybit"
-
-        r2 = requests.get(
-            f"https://api.bybit.com/v5/market/open-interest?category=linear&symbol={symbol_binance}&intervalTime=1h&limit=1",
-            headers=HEADERS, timeout=8,
-        )
-        if r2.status_code == 200:
-            data = r2.json()
-            if data.get("retCode") == 0 and data.get("result", {}).get("list"):
-                oi = safe_float(data["result"]["list"][0].get("openInterest")) 
-                if oi > 0:
-                    result["oi"] = oi
-
-        r3 = requests.get(
-            f"https://api.bybit.com/v5/market/funding/history?category=linear&symbol={symbol_binance}&limit=1",
-            headers=HEADERS, timeout=8,
-        )
-        if r3.status_code == 200:
-            data = r3.json()
-            if data.get("retCode") == 0 and data.get("result", {}).get("list"):
-                fr = safe_float(data["result"]["list"][0].get("fundingRate")) 
-                result["funding_rate"] = fr * 100
-
-        if result["source"] == "Bybit":
-            return result
-    except Exception:
-        pass
-
-    try:
-        r = requests.get(
-            f"https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio?ccy={t}&period=1H",
-            headers=HEADERS, timeout=8,
-        )
-        if r.status_code == 200:
-            data = r.json()
-            if data.get("code") == "0" and data.get("data"):
-                item = data["data"][0]
-                if isinstance(item, list) and len(item) > 1:
-                    ratio = safe_float(item[1])
-                elif isinstance(item, dict):
-                    ratio = safe_float(item.get("ratio", 1.0))
-                else:
-                    ratio = safe_float(item, 1.0)
-                long_pct = round(ratio / (1 + ratio) * 100, 1)
-                result["long_pct"] = long_pct
-                result["short_pct"] = round(100 - long_pct, 1)
-                result["source"] = "OKX"
-
-        r2 = requests.get(
-            f"https://www.okx.com/api/v5/public/open-interest?instType=SWAP&instId={symbol_okx}",
-            headers=HEADERS, timeout=8,
-        )
-        if r2.status_code == 200:
-            data = r2.json()
-            if data.get("code") == "0" and data.get("data"):
-                oi = safe_float(data["data"][0].get("oi")) 
-                if oi > 0:
-                    result["oi"] = oi
-
-        r3 = requests.get(
-            f"https://www.okx.com/api/v5/public/funding-rate?instId={symbol_okx}",
-            headers=HEADERS, timeout=8,
-        )
-        if r3.status_code == 200:
-            data = r3.json()
-            if data.get("code") == "0" and data.get("data"):
-                fr = safe_float(data["data"][0].get("fundingRate")) 
-                result["funding_rate"] = fr * 100
-
-        if result["source"] == "OKX":
-            return result
-    except Exception:
-        pass
-
     return result
 
 
-# ============================================================
-# DATA PROCESSING LAYER FOR GLOBAL MACRO
-# ============================================================
 @st.cache_data(ttl=300, show_spinner="Gathering cross-asset macro indicators...")
 def load_macro_data() -> Dict[str, pd.DataFrame]:
     macro_tickers = {
@@ -642,7 +528,7 @@ def load_macro_data() -> Dict[str, pd.DataFrame]:
 
 
 # ============================================================
-# 5. CHART BUILDING
+# 5. RENDER SYSTEM AND DATA VISUALIZERS
 # ============================================================
 def build_asset_chart(
     h_data: pd.DataFrame,
@@ -795,7 +681,7 @@ def build_asset_chart(
 
 
 # ============================================================
-# 6. SIDEBAR CONTROLS
+# 6. SIDEBAR UX CONFIGURATION WIRES
 # ============================================================
 st.sidebar.header("Controls")
 t_raw = st.sidebar.text_input("Enter Tickers (commas):", value="BTC-USD, ETH-USD, SOL-USD, XRP-USD")
@@ -829,19 +715,17 @@ is_6h = res_cfg["is_6h"]
 st_autorefresh(interval=rf_rate * 1000, key="datarefresh")
 
 # ============================================================
-# 7. MAIN APP ENTERPRISE WORKSPACE
+# 7. CORE CORE WORKSPACE COMPILING CONTAINER
 # ============================================================
-
 st.markdown('<div class="silver-title">OneStop-InfoSpot</div>', unsafe_allow_html=True)
 st.markdown('<div class="silver-subtitle">📈 Asset Intelligence Terminal</div>', unsafe_allow_html=True)
 
 st.caption("Dark mode • Candlesticks • Long/Short + OI + Funding • RSI • MACD • Bollinger • On-chain • Global Macro")
 
-# Initializing Native UI Workspace Decoupling Tabs
 tab_crypto, tab_macro = st.tabs(["⚡ Crypto Intelligence Terminal", "🌐 Global Macro Insights"])
 
 # ------------------------------------------------------------
-# TAB 1: CRYPTO INTELLIGENCE WORKSPACE (YOUR ORIGINAL LOGIC)
+# TAB 1: CRYPTO INTELLIGENCE WORKSPACE
 # ------------------------------------------------------------
 with tab_crypto:
     if not tkrs:
@@ -1040,7 +924,6 @@ with tab_crypto:
 
             with col1:
                 st.subheader("📰 Live Crypto News")
-                # Using the current minute/second as a unique cache buster pulse key to ensure true live retrieval
                 pulse_key = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')
                 news = get_crypto_news(cache_buster=pulse_key)
                 if news:
@@ -1083,7 +966,6 @@ with tab_macro:
     if not macro_data:
         st.info("Macro matrix data endpoints temporarily unavailable. Retrying query package updates...")
     else:
-        # 1. Macro Summary Cards Grid
         m_cols = st.columns(3)
         m_index = 0
         
@@ -1100,7 +982,6 @@ with tab_macro:
                     col_target.metric(name, f"${current_p:,.2f}", f"{pct_delta:+.2f}%")
                 m_index += 1
 
-        # 2. Normalized Comparative Performance Visualizer
         st.markdown("#### 📉 90-Day Normalized Comparative Performance Matrix")
         st.caption("All indices normalized to zero base from original baseline inception interval to pinpoint risk-on/risk-off decoupling triggers.")
         
