@@ -314,7 +314,7 @@ def get_daily_pivots(tickers: Tuple[str, ...]) -> Dict[str, Dict[str, float]]:
 def get_fear_greed() -> Tuple[str, str]:
     try:
         res = requests.get("https://api.alternative.me/fng/", headers=HEADERS, timeout=8).json()
-        data = res["data"][0]
+        data = res["data"]
         return data["value"], data["value_classification"]
     except Exception:
         return "N/A", "Unavailable"
@@ -478,7 +478,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
             headers=HEADERS, timeout=8,
         )
         if r.status_code == 200 and r.json():
-            data = r.json()
+            data = r.json()[0]  # FIXED: Unpack first chronological dict from array list
             long_acc = safe_float(data.get("longAccount"), 0.5)
             short_acc = safe_float(data.get("shortAccount"), 0.5)
             total = long_acc + short_acc
@@ -517,7 +517,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r.status_code == 200:
             data = r.json()
             if data.get("retCode") == 0 and data.get("result", {}).get("list"):
-                item = data["result"]["list"]
+                item = data["result"]["list"][0]  # FIXED: Target correct element payload index dictionary offset
                 buy_ratio = safe_float(item.get("buyRatio"), 0.5)
                 sell_ratio = safe_float(item.get("sellRatio"), 0.5)
                 total = buy_ratio + sell_ratio
@@ -533,7 +533,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r2.status_code == 200:
             data = r2.json()
             if data.get("retCode") == 0 and data.get("result", {}).get("list"):
-                oi = safe_float(data["result"]["list"].get("openInterest"))
+                oi = safe_float(data["result"]["list"][0].get("openInterest")) # FIXED: Unpack internal arrays
                 if oi > 0:
                     result["oi"] = oi
 
@@ -544,7 +544,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r3.status_code == 200:
             data = r3.json()
             if data.get("retCode") == 0 and data.get("result", {}).get("list"):
-                fr = safe_float(data["result"]["list"].get("fundingRate"))
+                fr = safe_float(data["result"]["list"][0].get("fundingRate")) # FIXED: Access internal arrays
                 result["funding_rate"] = fr * 100
 
         if result["source"] == "Bybit":
@@ -560,7 +560,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r.status_code == 200:
             data = r.json()
             if data.get("code") == "0" and data.get("data"):
-                item = data["data"]
+                item = data["data"][0] # FIXED: Select inner dictionary index 
                 ratio = safe_float(item if len(item) > 1 else 1.0)
                 long_pct = round(ratio / (1 + ratio) * 100, 1)
                 result["long_pct"] = long_pct
@@ -574,7 +574,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r2.status_code == 200:
             data = r2.json()
             if data.get("code") == "0" and data.get("data"):
-                oi = safe_float(data["data"].get("oi"))
+                oi = safe_float(data["data"][0].get("oi")) # FIXED: Unpack internal lists
                 if oi > 0:
                     result["oi"] = oi
 
@@ -585,7 +585,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r3.status_code == 200:
             data = r3.json()
             if data.get("code") == "0" and data.get("data"):
-                fr = safe_float(data["data"].get("fundingRate"))
+                fr = safe_float(data["data"][0].get("fundingRate")) # FIXED: Unpack internal lists
                 result["funding_rate"] = fr * 100
 
         if result["source"] == "OKX":
@@ -597,7 +597,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
 
 
 # ============================================================
-# NEW COMPONENT: DATA PROCESSING LAYER FOR GLOBAL MACRO
+# DATA PROCESSING LAYER FOR GLOBAL MACRO
 # ============================================================
 @st.cache_data(ttl=300, show_spinner="Gathering cross-asset macro indicators...")
 def load_macro_data() -> Dict[str, pd.DataFrame]:
@@ -1049,7 +1049,7 @@ with tab_crypto:
                 st.metric("Fear & Greed", f"{fng_v}/100", fng_c)
 
 # ------------------------------------------------------------
-# TAB 2: GLOBAL MACRO INSIGHTS WORKSPACE (NEW COMPONENT)
+# TAB 2: GLOBAL MACRO INSIGHTS WORKSPACE
 # ------------------------------------------------------------
 with tab_macro:
     st.subheader("🌐 Broad Market Telemetry Framework")
