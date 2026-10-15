@@ -722,7 +722,7 @@ st_autorefresh(interval=rf_rate * 1000, key="datarefresh")
 # 7. MAIN LAYOUT
 # ============================================================
 st.markdown('<div class="silver-title">OneStop-InfoSpot</div>', unsafe_allow_html=True)
-st.markdown('<div class="silver-subtitle">📈 Asset Intelligence Terminal</div>', unsafe_allow_html=True)
+st.markdown('<div class="silver-subtitle">Asset Intelligence Terminal</div>', unsafe_allow_html=True)
 
 st.caption("Dark mode • Candlesticks • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro")
 
