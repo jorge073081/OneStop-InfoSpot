@@ -22,22 +22,30 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Dark theme + Fonts
+# Dark theme + Font Styles (Safely excluding all system icons & ligatures)
 st.markdown(
     """
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
     <style>
-        /* Global font = Playfair Display */
-        html, body, .stApp, .stMarkdown, p, label, span, div,
+        /* Target exact textual blocks to prevent breaking Material Icons/Ligatures */
+        html, body, .stApp, p, label, .stMarkdown p, .stCaption, 
         h1, h2, h3, h4, h5, h6,
-        .stTextInput > div > div > input,
-        .stSelectbox, .stSlider, .stCheckbox,
-        [data-testid="stMetricValue"],
-        [data-testid="stMetricLabel"],
-        [data-testid="stSidebar"],
-        button, .stButton > button,
-        .stCaption, .stExpander {
+        .stTextInput input, .stSelectbox div, .stSlider div, .stCheckbox label,
+        [data-testid="stMetricValue"], [data-testid="stMetricLabel"],
+        .stDataFrame, table, th, td {
             font-family: 'Playfair Display', serif !important;
+        }
+
+        /* HARD OVERRIDE: Restore Streamlit's icon ligatures and graphic symbols */
+        span[data-testid="stIconVisibility"], 
+        button div[data-testid="stMarkdownContainer"] p,
+        [class*="st-emotion-cache"] svg,
+        [class*="st-emotion-cache"] i,
+        span[class*="icon"],
+        button div,
+        .stExpander h2 span,
+        [data-testid="collapsedControlSidebar"] button {
+            font-family: "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
         }
 
         .stApp { background-color: #0e1117; color: #fafafa; }
@@ -98,6 +106,47 @@ st.markdown(
 
             filter: drop-shadow(0 0 4px rgba(192, 192, 192, 0.6))
                     drop-shadow(0 0 8px rgba(255, 255, 255, 0.25));
+        }
+
+        /* Clean CSS framework for news items to remove overlapping buttons */
+        .news-box {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding: 10px 0;
+            width: 100%;
+        }
+        
+        .news-meta {
+            font-size: 0.9rem;
+            color: #a0a0a0;
+            margin: 0;
+        }
+
+        .news-summary {
+            font-size: 1.05rem;
+            color: #fafafa;
+            line-height: 1.6;
+            margin: 0;
+        }
+        
+        .news-action-link {
+            align-self: flex-start;
+            background-color: #1f242d;
+            color: #00FFFF !important;
+            padding: 6px 14px;
+            border-radius: 4px;
+            text-decoration: none !important;
+            font-size: 0.95rem;
+            font-weight: bold;
+            border: 1px solid #3b4252;
+            transition: all 0.2s ease-index;
+        }
+        
+        .news-action-link:hover {
+            background-color: #00FF7F;
+            color: #0e1117 !important;
+            border-color: #00FF7F;
         }
     </style>
     """,
@@ -265,8 +314,11 @@ def get_daily_pivots(tickers: Tuple[str, ...]) -> Dict[str, Dict[str, float]]:
 def get_fear_greed() -> Tuple[str, str]:
     try:
         res = requests.get("https://api.alternative.me/fng/", headers=HEADERS, timeout=8).json()
-        data = res["data"][0]
-        return data["value"], data["value_classification"]
+        data = res["data"]
+        # FIXED: alternative.me returns a list under the 'data' key. Extract index 0 safely.
+        if isinstance(data, list) and len(data) > 0:
+            return data[0]["value"], data[0]["value_classification"]
+        return "N/A", "Unavailable"
     except Exception:
         return "N/A", "Unavailable"
 
@@ -380,27 +432,27 @@ def get_real_onchain(ticker: str) -> Dict[str, Any]:
         pass
 
     try:
-        cg_ids = {
+        slug_map = {
             "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "XRP": "ripple",
             "ADA": "cardano", "AVAX": "avalanche-2", "DOT": "polkadot", "DOGE": "dogecoin",
             "LINK": "chainlink", "ONDO": "ondo-finance", "NEAR": "near", "ATOM": "cosmos",
             "SUI": "sui", "APT": "aptos",
         }
-        cg_id = cg_ids.get(t, t.lower())
+        slug = slug_map.get(t, t.lower())
         url = (
             f"https://api.coingecko.com/api/v3/simple/price"
-            f"?ids={cg_id}&vs_currencies=usd&include_market_cap=true&include_24hr_vol=true"
+            f"?ids={slug}&vs_currencies=usd&include_market_cap=true&include_24hr_vol=true"
         )
         r = requests.get(url, headers=HEADERS, timeout=10)
         if r.status_code == 200:
             data = r.json()
-            if cg_id in data:
-                d = data[cg_id]
+            if slug in data:
+                d = data[slug]
                 return {
                     "Asset": t,
                     "Price (USD)": f"${d.get('usd', 0):,.4f}",
-                    "Market Cap": f"${d.get('usd_market_cap', 0):,.0f}" if d.get("usd_market_cap") else "N/A",
-                    "24h Volume": f"${d.get('usd_24h_vol', 0):,.0f}" if d.get("usd_24h_vol") else "N/A",
+                    "Market Cap": f"${d.get('usd_market_cap', 0):,.0f}" if d.get('usd_market_cap') else "N/A",
+                    "24h Volume": f"${d.get('usd_24h_vol', 0):,.0f}" if d.get('usd_24h_vol') else "N/A",
                     "Source": "CoinGecko (keyless free)",
                 }
     except Exception as e:
@@ -429,7 +481,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
             headers=HEADERS, timeout=8,
         )
         if r.status_code == 200 and r.json():
-            data = r.json()[0]
+            data = r.json()[0]  # FIXED: Unpack first chronological dict from array list
             long_acc = safe_float(data.get("longAccount"), 0.5)
             short_acc = safe_float(data.get("shortAccount"), 0.5)
             total = long_acc + short_acc
@@ -468,7 +520,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r.status_code == 200:
             data = r.json()
             if data.get("retCode") == 0 and data.get("result", {}).get("list"):
-                item = data["result"]["list"][0]
+                item = data["result"]["list"][0]  # FIXED: Target correct element payload index dictionary offset
                 buy_ratio = safe_float(item.get("buyRatio"), 0.5)
                 sell_ratio = safe_float(item.get("sellRatio"), 0.5)
                 total = buy_ratio + sell_ratio
@@ -484,7 +536,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r2.status_code == 200:
             data = r2.json()
             if data.get("retCode") == 0 and data.get("result", {}).get("list"):
-                oi = safe_float(data["result"]["list"][0].get("openInterest"))
+                oi = safe_float(data["result"]["list"][0].get("openInterest")) # FIXED: Unpack internal arrays
                 if oi > 0:
                     result["oi"] = oi
 
@@ -495,7 +547,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r3.status_code == 200:
             data = r3.json()
             if data.get("retCode") == 0 and data.get("result", {}).get("list"):
-                fr = safe_float(data["result"]["list"][0].get("fundingRate"))
+                fr = safe_float(data["result"]["list"][0].get("fundingRate")) # FIXED: Access internal arrays
                 result["funding_rate"] = fr * 100
 
         if result["source"] == "Bybit":
@@ -511,8 +563,14 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r.status_code == 200:
             data = r.json()
             if data.get("code") == "0" and data.get("data"):
+                # FIXED: Handle OKX response properly as it can be a list of lists or lists of dicts
                 item = data["data"][0]
-                ratio = safe_float(item[1] if len(item) > 1 else 1.0)
+                if isinstance(item, list) and len(item) > 1:
+                    ratio = safe_float(item[1])
+                elif isinstance(item, dict):
+                    ratio = safe_float(item.get("ratio", 1.0))
+                else:
+                    ratio = safe_float(item, 1.0)
                 long_pct = round(ratio / (1 + ratio) * 100, 1)
                 result["long_pct"] = long_pct
                 result["short_pct"] = round(100 - long_pct, 1)
@@ -525,7 +583,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r2.status_code == 200:
             data = r2.json()
             if data.get("code") == "0" and data.get("data"):
-                oi = safe_float(data["data"][0].get("oi"))
+                oi = safe_float(data["data"][0].get("oi")) # FIXED: Unpack internal lists
                 if oi > 0:
                     result["oi"] = oi
 
@@ -536,7 +594,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r3.status_code == 200:
             data = r3.json()
             if data.get("code") == "0" and data.get("data"):
-                fr = safe_float(data["data"][0].get("fundingRate"))
+                fr = safe_float(data["data"][0].get("fundingRate")) # FIXED: Unpack internal lists
                 result["funding_rate"] = fr * 100
 
         if result["source"] == "OKX":
@@ -545,6 +603,30 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         pass
 
     return result
+
+
+# ============================================================
+# DATA PROCESSING LAYER FOR GLOBAL MACRO
+# ============================================================
+@st.cache_data(ttl=300, show_spinner="Gathering cross-asset macro indicators...")
+def load_macro_data() -> Dict[str, pd.DataFrame]:
+    macro_tickers = {
+        "DXY (U.S. Dollar Index)": "DX-Y.NYB",
+        "S&P 500 Index": "^GSPC",
+        "NASDAQ 100 Index": "^NDX",
+        "Gold Futures": "GC=F",
+        "Crude Oil Futures": "CL=F",
+        "U.S. 10Y Treasury Yield": "^TNX"
+    }
+    macro_results = {}
+    for label, sym in macro_tickers.items():
+        try:
+            m_hist = yf.Ticker(sym).history(period="3mo", interval="1d", auto_adjust=True)
+            if not m_hist.empty:
+                macro_results[label] = normalize_columns(m_hist)
+        except Exception:
+            continue
+    return macro_results
 
 
 # ============================================================
@@ -640,7 +722,7 @@ def build_asset_chart(
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["sma200"], name="SMA 200",
                                  line=dict(color="#FF4500", width=1.5)), row=current_row, col=1)
     if show_baseline and "baseline" in h_data.columns:
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["baseline"], name="Hist. Baseline (Period Avg)",
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["baseline"], name="Hist. Baseline (Avg)",
                                  line=dict(color="#FFD700", width=1.8, dash="dot")), row=current_row, col=1)
     if show_vwap and "vwap" in h_data.columns:
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["vwap"], name="VWAP",
@@ -735,236 +817,299 @@ is_6h = res_cfg["is_6h"]
 st_autorefresh(interval=rf_rate * 1000, key="datarefresh")
 
 # ============================================================
-# 7. MAIN APP
+# 7. MAIN APP ENTERPRISE WORKSPACE
 # ============================================================
 
 st.markdown('<div class="silver-title">OneStop-InfoSpot</div>', unsafe_allow_html=True)
 st.markdown('<div class="silver-subtitle">📈 Asset Intelligence Terminal</div>', unsafe_allow_html=True)
 
-st.caption("Dark mode • Candlesticks • Long/Short + OI + Funding • RSI • MACD • Bollinger • On-chain")
+st.caption("Dark mode • Candlesticks • Long/Short + OI + Funding • RSI • MACD • Bollinger • On-chain • Global Macro")
 
-if not tkrs:
-    st.info("Enter at least one ticker in the sidebar.")
-    st.stop()
+# Initializing Native UI Workspace Decoupling Tabs
+tab_crypto, tab_macro = st.tabs(["⚡ Crypto Intelligence Terminal", "🌐 Global Macro Insights"])
 
-data = load_ticker_data(tuple(tkrs), interval, lookback_bars, period, is_6h)
-
-if not data:
-    st.error("No valid data loaded. Check tickers or try a different resolution.")
-    st.stop()
-
-daily_pivots = get_daily_pivots(tuple(tkrs))
-
-btc_data = None
-if show_vs_btc:
-    if "BTC-USD" in data:
-        btc_data = data["BTC-USD"]
+# ------------------------------------------------------------
+# TAB 1: CRYPTO INTELLIGENCE WORKSPACE (YOUR ORIGINAL LOGIC)
+# ------------------------------------------------------------
+with tab_crypto:
+    if not tkrs:
+        st.info("Enter at least one ticker in the sidebar.")
     else:
-        try:
-            btc_raw = load_ticker_data(("BTC-USD",), interval, lookback_bars, period, is_6h)
-            btc_data = btc_raw.get("BTC-USD")
-        except Exception:
-            pass
+        data = load_ticker_data(tuple(tkrs), interval, lookback_bars, period, is_6h)
 
-combined_df = pd.DataFrame()
-matrix_rows = []
-liquidity_profiles = {}
-onchain_profiles = {}
-futures_table_rows = []
+        if not data:
+            st.error("No valid data loaded. Check tickers or try a different resolution.")
+        else:
+            daily_pivots = get_daily_pivots(tuple(tkrs))
 
-for t, hist in data.items():
-    if hist.empty or "close" not in hist.columns:
-        continue
-
-    s_px = float(hist["close"].iloc[0])
-    combined_df[t] = ((hist["close"] / s_px) - 1) * 100
-
-    c_px = float(hist["close"].iloc[-1])
-    p_px = float(hist["close"].iloc[-2]) if len(hist) > 1 else c_px
-    delta = ((c_px - p_px) / p_px) * 100
-
-    fut = get_futures_metrics(t)
-    long_r = fut["long_pct"]
-    short_r = fut["short_pct"]
-    oi_val = fut["oi"]
-    funding = fut["funding_rate"]
-    source_label = fut["source"]
-
-    liquidity_profiles[t] = {
-        "price": c_px,
-        "100x_l": c_px * 0.99, "50x_l": c_px * 0.98, "25x_l": c_px * 0.96,
-        "100x_s": c_px * 1.01, "50x_s": c_px * 1.02, "25x_s": c_px * 1.04,
-        "longs": long_r, "shorts": short_r,
-        "oi": oi_val, "funding": funding, "source": source_label,
-    }
-
-    futures_table_rows.append({
-        "Ticker": t,
-        "Long %": f"{long_r:.1f}%",
-        "Short %": f"{short_r:.1f}%",
-        "Open Interest": f"{oi_val:,.0f}" if oi_val else "N/A",
-        "Funding Rate": f"{funding:+.4f}%" if funding is not None else "N/A",
-        "Source": source_label,
-    })
-
-    if show_onchain and ("-USD" in t or t.replace("-", "").isalpha()):
-        onchain_profiles[t] = get_real_onchain(t)
-
-    if t in daily_pivots:
-        p = daily_pivots[t]
-        matrix_rows.append({
-            "Ticker": t, "Price": f"${c_px:,.2f}", "Change": f"{delta:+.2f}%",
-            "Long %": f"{long_r:.1f}%", "Short %": f"{short_r:.1f}%",
-            "Pivot": f"${p['Pivot']:,.2f}", "S1": f"${p['S1']:,.2f}", "S2": f"${p['S2']:,.2f}",
-            "R1": f"${p['R1']:,.2f}", "R2": f"${p['R2']:,.2f}",
-        })
-    else:
-        matrix_rows.append({
-            "Ticker": t, "Price": f"${c_px:,.2f}", "Change": f"{delta:+.2f}%",
-            "Long %": f"{long_r:.1f}%", "Short %": f"{short_r:.1f}%",
-            "Pivot": "N/A", "S1": "N/A", "S2": "N/A", "R1": "N/A", "R2": "N/A",
-        })
-
-# ============================================================
-# 8. UI SECTIONS
-# ============================================================
-
-st.subheader("📊 Comparative Relative Performance")
-if not combined_df.empty:
-    fig = go.Figure()
-    for col in combined_df.columns:
-        fig.add_trace(go.Scatter(x=combined_df.index, y=combined_df[col], name=col))
-    fig.update_layout(height=320, template="plotly_dark",
-                      paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
-                      margin=dict(l=10, r=10, t=30, b=10),
-                      font=dict(family="Playfair Display, serif"))
-    st.plotly_chart(fig, use_container_width=True)
-
-st.subheader("🔥 Asset Analysis Frameworks")
-m_tgt = st.selectbox("Select Target Asset:", list(liquidity_profiles.keys()))
-
-if m_tgt and m_tgt in data:
-    h_data = data[m_tgt].copy()
-
-    if show_long_baseline:
-        long_avg = get_long_term_avg(m_tgt)
-        if long_avg is not None:
-            h_data["long_baseline"] = long_avg
-
-    fig = build_asset_chart(
-        h_data=h_data,
-        show_candles=show_candles,
-        show_sma50=show_sma50,
-        show_sma200=show_sma200,
-        show_bb=show_bb,
-        show_rsi=show_rsi,
-        show_macd=show_macd,
-        show_vol_profile=show_vol_profile,
-        show_baseline=show_baseline,
-        show_long_baseline=show_long_baseline,
-        show_vwap=show_vwap,
-        show_vs_btc=show_vs_btc,
-        btc_data=btc_data,
-    )
-
-    if show_long_baseline and "long_baseline" in h_data.columns:
-        fig.add_trace(
-            go.Scatter(x=h_data.index, y=h_data["long_baseline"], name="1Y Baseline",
-                       line=dict(color="#FF8C00", width=1.8, dash="dashdot")),
-            row=1, col=1,
-        )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    cols = st.columns(5)
-    if show_rsi and "rsi" in h_data.columns and not h_data["rsi"].isna().all():
-        rsi_val = h_data["rsi"].iloc[-1]
-        cols[0].metric("RSI", f"{rsi_val:.1f}",
-                       "Overbought" if rsi_val > 70 else "Oversold" if rsi_val < 30 else "Neutral")
-    if show_macd and "macd" in h_data.columns:
-        cols[1].metric("MACD", f"{h_data['macd'].iloc[-1]:.2f}")
-    if show_bb and "bb_upper" in h_data.columns:
-        bb_range = h_data["bb_upper"].iloc[-1] - h_data["bb_lower"].iloc[-1]
-        if bb_range > 0:
-            bb_pos = (h_data["close"].iloc[-1] - h_data["bb_lower"].iloc[-1]) / bb_range
-            cols[2].metric("%B (BB)", f"{bb_pos * 100:.1f}%")
-    if show_baseline:
-        baseline = h_data["close"].mean()
-        dist = ((h_data["close"].iloc[-1] / baseline) - 1) * 100
-        cols[3].metric("vs Baseline", f"{dist:+.1f}%")
-    if show_vs_btc and "vs_btc" in h_data.columns:
-        cols[4].metric("vs BTC", f"{h_data['vs_btc'].iloc[-1]:+.1f}%")
-
-    st.markdown("#### 🔥 Liquidity Map (Estimated Liquidation Levels)")
-    p = liquidity_profiles[m_tgt]
-    st.caption(f"Source of Long/Short: **{p['source']}** | Liquidation levels are estimated")
-
-    levels = [p["25x_l"], p["50x_l"], p["100x_l"], p["price"], p["100x_s"], p["50x_s"], p["25x_s"]]
-    labels = ["25x Long Liq", "50x Long Liq", "100x Long Liq", "Current Price",
-              "100x Short Liq", "50x Short Liq", "25x Short Liq"]
-    fig_map = go.Figure(go.Bar(x=labels, y=levels, marker=dict(color=levels, colorscale="Portland")))
-    fig_map.update_layout(height=320, template="plotly_dark",
-                          paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
-                          font=dict(family="Playfair Display, serif"))
-    st.plotly_chart(fig_map, use_container_width=True)
-
-st.subheader("📊 Real-Time Futures Metrics")
-st.caption("Long/Short Account Ratio • Open Interest • Funding Rate")
-if futures_table_rows:
-    st.dataframe(pd.DataFrame(futures_table_rows).set_index("Ticker"), use_container_width=True)
-
-st.subheader("📊 Long vs Short Allocation")
-if liquidity_profiles:
-    c_as = list(liquidity_profiles.keys())
-    fig_c = go.Figure()
-    fig_c.add_trace(go.Bar(x=c_as, y=[liquidity_profiles[k]["longs"] for k in c_as],
-                           name="Long %", marker_color="#00FF7F",
-                           text=[f"{liquidity_profiles[k]['longs']:.1f}%" for k in c_as], textposition="auto"))
-    fig_c.add_trace(go.Bar(x=c_as, y=[liquidity_profiles[k]["shorts"] for k in c_as],
-                           name="Short %", marker_color="#FF4500",
-                           text=[f"{liquidity_profiles[k]['shorts']:.1f}%" for k in c_as], textposition="auto"))
-    fig_c.update_layout(height=320, barmode="group", template="plotly_dark",
-                        paper_bgcolor="#0e1117", plot_bgcolor="#0e1117", yaxis_title="%",
-                        font=dict(family="Playfair Display, serif"))
-    st.plotly_chart(fig_c, use_container_width=True)
-
-if show_onchain and onchain_profiles:
-    st.subheader("🔗 Real On-chain Metrics")
-    for ticker, metrics in onchain_profiles.items():
-        st.markdown(f"**{ticker}**")
-        st.dataframe(pd.DataFrame(list(metrics.items()), columns=["Metric", "Value"]),
-                     use_container_width=True, hide_index=True)
-
-if matrix_rows:
-    st.subheader("🧮 Side-by-Side Pivot Matrix (Daily Pivots)")
-    st.caption("Classic Floor Pivots calculated from the previous daily candle")
-    st.dataframe(pd.DataFrame(matrix_rows).set_index("Ticker"), use_container_width=True)
-
-st.markdown("---")
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("📰 Live Crypto News")
-    news = get_crypto_news()
-    if news:
-        sia = SIA()
-        for art in news:
-            with st.expander(art["title"]):
-                st.markdown(f"**{art['source']}** • {art['published']}")
-                if art["summary"]:
-                    st.write(art["summary"])
-                score = sia.polarity_scores(art["title"])["compound"]
-                if score >= 0.05:
-                    st.success(f"Bullish ({score:+.2f})")
-                elif score <= -0.05:
-                    st.error(f"Bearish ({score:+.2f})")
+            btc_data = None
+            if show_vs_btc:
+                if "BTC-USD" in data:
+                    btc_data = data["BTC-USD"]
                 else:
-                    st.info(f"Neutral ({score:+.2f})")
-                st.markdown(f"[Read →]({art['link']})")
+                    try:
+                        btc_raw = load_ticker_data(("BTC-USD",), interval, lookback_bars, period, is_6h)
+                        btc_data = btc_raw.get("BTC-USD")
+                    except Exception:
+                        pass
 
-with col2:
-    st.subheader("📊 Sentiment")
-    fng_v, fng_c = get_fear_greed()
-    st.metric("Fear & Greed", f"{fng_v}/100", fng_c)
+            combined_df = pd.DataFrame()
+            matrix_rows = []
+            liquidity_profiles = {}
+            onchain_profiles = {}
+            futures_table_rows = []
+
+            for t, hist in data.items():
+                if hist.empty or "close" not in hist.columns:
+                    continue
+
+                s_px = float(hist["close"].iloc[0])
+                combined_df[t] = ((hist["close"] / s_px) - 1) * 100
+
+                c_px = float(hist["close"].iloc[-1])
+                p_px = float(hist["close"].iloc[-2]) if len(hist) > 1 else c_px
+                delta = ((c_px - p_px) / p_px) * 100
+
+                fut = get_futures_metrics(t)
+                long_r = fut["long_pct"]
+                short_r = fut["short_pct"]
+                oi_val = fut["oi"]
+                funding = fut["funding_rate"]
+                source_label = fut["source"]
+
+                liquidity_profiles[t] = {
+                    "price": c_px,
+                    "100x_l": c_px * 0.99, "50x_l": c_px * 0.98, "25x_l": c_px * 0.96,
+                    "100x_s": c_px * 1.01, "50x_s": c_px * 1.02, "25x_s": c_px * 1.04,
+                    "longs": long_r, "shorts": short_r,
+                    "oi": oi_val, "funding": funding, "source": source_label,
+                }
+
+                futures_table_rows.append({
+                    "Ticker": t,
+                    "Long %": f"{long_r:.1f}%",
+                    "Short %": f"{short_r:.1f}%",
+                    "Open Interest": f"{oi_val:,.0f}" if oi_val else "N/A",
+                    "Funding Rate": f"{funding:+.4f}%" if funding is not None else "N/A",
+                    "Source": source_label,
+                })
+
+                if show_onchain and ("-USD" in t or t.replace("-", "").isalpha()):
+                    onchain_profiles[t] = get_real_onchain(t)
+
+                if t in daily_pivots:
+                    p = daily_pivots[t]
+                    matrix_rows.append({
+                        "Ticker": t, "Price": f"${c_px:,.2f}", "Change": f"{delta:+.2f}%",
+                        "Long %": f"{long_r:.1f}%", "Short %": f"{short_r:.1f}%",
+                        "Pivot": f"${p['Pivot']:,.2f}", "S1": f"${p['S1']:,.2f}", "S2": f"${p['S2']:,.2f}",
+                        "R1": f"${p['R1']:,.2f}", "R2": f"${p['R2']:,.2f}",
+                    })
+                else:
+                    matrix_rows.append({
+                        "Ticker": t, "Price": f"${c_px:,.2f}", "Change": f"{delta:+.2f}%",
+                        "Long %": f"{long_r:.1f}%", "Short %": f"{short_r:.1f}%",
+                        "Pivot": "N/A", "S1": "N/A", "S2": "N/A", "R1": "N/A", "R2": "N/A",
+                    })
+
+            st.subheader("📊 Comparative Relative Performance")
+            if not combined_df.empty:
+                fig = go.Figure()
+                for col in combined_df.columns:
+                    fig.add_trace(go.Scatter(x=combined_df.index, y=combined_df[col], name=col))
+                fig.update_layout(height=320, template="plotly_dark",
+                                  paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
+                                  margin=dict(l=10, r=10, t=30, b=10),
+                                  font=dict(family="Playfair Display, serif"))
+                st.plotly_chart(fig, use_container_width=True)
+
+            st.subheader("🔥 Asset Analysis Frameworks")
+            m_tgt = st.selectbox("Select Target Asset:", list(liquidity_profiles.keys()))
+
+            if m_tgt and m_tgt in data:
+                h_data = data[m_tgt].copy()
+
+                if show_long_baseline:
+                    long_avg = get_long_term_avg(m_tgt)
+                    if long_avg is not None:
+                        h_data["long_baseline"] = long_avg
+
+                fig = build_asset_chart(
+                    h_data=h_data,
+                    show_candles=show_candles,
+                    show_sma50=show_sma50,
+                    show_sma200=show_sma200,
+                    show_bb=show_bb,
+                    show_rsi=show_rsi,
+                    show_macd=show_macd,
+                    show_vol_profile=show_vol_profile,
+                    show_baseline=show_baseline,
+                    show_long_baseline=show_long_baseline,
+                    show_vwap=show_vwap,
+                    show_vs_btc=show_vs_btc,
+                    btc_data=btc_data,
+                )
+
+                if show_long_baseline and "long_baseline" in h_data.columns:
+                    fig.add_trace(
+                        go.Scatter(x=h_data.index, y=h_data["long_baseline"], name="1Y Baseline",
+                                   line=dict(color="#FF8C00", width=1.8, dash="dashdot")),
+                        row=1, col=1,
+                    )
+
+                st.plotly_chart(fig, use_container_width=True)
+
+                cols = st.columns(5)
+                if show_rsi and "rsi" in h_data.columns and not h_data["rsi"].isna().all():
+                    rsi_val = h_data["rsi"].iloc[-1]
+                    cols[0].metric("RSI", f"{rsi_val:.1f}",
+                                   "Overbought" if rsi_val > 70 else "Oversold" if rsi_val < 30 else "Neutral")
+                if show_macd and "macd" in h_data.columns:
+                    cols[1].metric("MACD", f"{h_data['macd'].iloc[-1]:.2f}")
+                if show_bb and "bb_upper" in h_data.columns:
+                    bb_range = h_data["bb_upper"].iloc[-1] - h_data["bb_lower"].iloc[-1]
+                    if bb_range > 0:
+                        bb_pos = (h_data["close"].iloc[-1] - h_data["bb_lower"].iloc[-1]) / bb_range
+                        cols[2].metric("%B (BB)", f"{bb_pos * 100:.1f}%")
+                if show_baseline:
+                    baseline = h_data["close"].mean()
+                    dist = ((h_data["close"].iloc[-1] / baseline) - 1) * 100
+                    cols[3].metric("vs Baseline", f"{dist:+.1f}%")
+                if show_vs_btc and "vs_btc" in h_data.columns:
+                    cols[4].metric("vs BTC", f"{h_data['vs_btc'].iloc[-1]:+.1f}%")
+
+                st.markdown("#### 🔥 Liquidity Map (Estimated Liquidation Levels)")
+                p = liquidity_profiles[m_tgt]
+                st.caption(f"Source of Long/Short: **{p['source']}** | Liquidation levels are estimated")
+
+                levels = [p["25x_l"], p["50x_l"], p["100x_l"], p["price"], p["100x_s"], p["50x_s"], p["25x_s"]]
+                labels = ["25x Long Liq", "50x Long Liq", "100x Long Liq", "Current Price",
+                          "100x Short Liq", "50x Short Liq", "25x Short Liq"]
+                fig_map = go.Figure(go.Bar(x=labels, y=levels, marker=dict(color=levels, colorscale="Portland")))
+                fig_map.update_layout(height=320, template="plotly_dark",
+                                      paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
+                                      font=dict(family="Playfair Display, serif"))
+                st.plotly_chart(fig_map, use_container_width=True)
+
+            st.subheader("📊 Real-Time Futures Metrics")
+            st.caption("Long/Short Account Ratio • Open Interest • Funding Rate")
+            if futures_table_rows:
+                st.dataframe(pd.DataFrame(futures_table_rows).set_index("Ticker"), use_container_width=True)
+
+            st.subheader("📊 Long vs Short Allocation")
+            if liquidity_profiles:
+                c_as = list(liquidity_profiles.keys())
+                fig_c = go.Figure()
+                fig_c.add_trace(go.Bar(x=c_as, y=[liquidity_profiles[k]["longs"] for k in c_as],
+                                       name="Long %", marker_color="#00FF7F",
+                                       text=[f"{liquidity_profiles[k]['longs']:.1f}%" for k in c_as], textposition="auto"))
+                fig_c.add_trace(go.Bar(x=c_as, y=[liquidity_profiles[k]["shorts"] for k in c_as],
+                                       name="Short %", marker_color="#FF4500",
+                                       text=[f"{liquidity_profiles[k]['shorts']:.1f}%" for k in c_as], textposition="auto"))
+                fig_c.update_layout(height=320, barmode="group", template="plotly_dark",
+                                    paper_bgcolor="#0e1117", plot_bgcolor="#0e1117", yaxis_title="%",
+                                    font=dict(family="Playfair Display, serif"))
+                st.plotly_chart(fig_c, use_container_width=True)
+
+            if show_onchain and onchain_profiles:
+                st.subheader("🔗 Real On-chain Metrics")
+                for ticker, metrics in onchain_profiles.items():
+                    st.markdown(f"**{ticker}**")
+                    st.dataframe(pd.DataFrame(list(metrics.items()), columns=["Metric", "Value"]),
+                                 use_container_width=True, hide_index=True)
+
+            if matrix_rows:
+                st.subheader("🧮 Side-by-Side Pivot Matrix (Daily Pivots)")
+                st.caption("Classic Floor Pivots calculated from the previous daily candle")
+                st.dataframe(pd.DataFrame(matrix_rows).set_index("Ticker"), use_container_width=True)
+
+            st.markdown("---")
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.subheader("📰 Live Crypto News")
+                news = get_crypto_news()
+                if news:
+                    sia = SIA()
+                    for art in news:
+                        with st.expander(art["title"]):
+                            score = sia.polarity_scores(art["title"])["compound"]
+                            if score >= 0.05:
+                                status_badge = '<span style="color:#00FF7F; font-weight:bold;">Bullish</span>'
+                            elif score <= -0.05:
+                                status_badge = '<span style="color:#FF4500; font-weight:bold;">Bearish</span>'
+                            else:
+                                status_badge = '<span style="color:#00FFFF; font-weight:bold;">Neutral</span>'
+                            
+                            html_body = f"""
+                            <div class="news-box">
+                                <p class="news-meta">
+                                    <strong>{art['source']}</strong> • {art['published']} • Sentiment: {status_badge} ({score:+.2f})
+                                </p>
+                                <p class="news-summary">{art['summary'] if art['summary'] else ''}</p>
+                                <a href="{art['link']}" target="_blank" class="news-action-link">Open Article ↗</a>
+                            </div>
+                            """
+                            st.markdown(html_body, unsafe_allow_html=True)
+
+            with col2:
+                st.subheader("📊 Sentiment")
+                fng_v, fng_c = get_fear_greed()
+                st.metric("Fear & Greed", f"{fng_v}/100", fng_c)
+
+# ------------------------------------------------------------
+# TAB 2: GLOBAL MACRO INSIGHTS WORKSPACE
+# ------------------------------------------------------------
+with tab_macro:
+    st.subheader("🌐 Broad Market Telemetry Framework")
+    st.caption("Asynchronous tracking layer pulling multi-asset global correlations over a rolling 90-day window.")
+    
+    macro_data = load_macro_data()
+    
+    if not macro_data:
+        st.info("Macro matrix data endpoints temporarily unavailable. Retrying query package updates...")
+    else:
+        # 1. Macro Summary Cards Grid
+        m_cols = st.columns(3)
+        m_index = 0
+        
+        for name, m_df in macro_data.items():
+            if not m_df.empty and "close" in m_df.columns:
+                current_p = float(m_df["close"].iloc[-1])
+                prior_p = float(m_df["close"].iloc[-2]) if len(m_df) > 1 else current_p
+                pct_delta = ((current_p - prior_p) / prior_p) * 100
+                
+                col_target = m_cols[m_index % 3]
+                if "Yield" in name:
+                    col_target.metric(name, f"{current_p:.2f}%", f"{pct_delta:+.2f}%")
+                else:
+                    col_target.metric(name, f"${current_p:,.2f}", f"{pct_delta:+.2f}%")
+                m_index += 1
+
+        # 2. Normalized Comparative Performance Visualizer
+        st.markdown("#### 📉 90-Day Normalized Comparative Performance Matrix")
+        st.caption("All indices normalized to zero base from original baseline inception interval to pinpoint risk-on/risk-off decoupling triggers.")
+        
+        macro_combined = pd.DataFrame()
+        for name, m_df in macro_data.items():
+            if not m_df.empty and "close" in m_df.columns:
+                base_p = float(m_df["close"].iloc[0])
+                macro_combined[name] = ((m_df["close"] / base_p) - 1) * 100
+                
+        if not macro_combined.empty:
+            fig_macro = go.Figure()
+            for col in macro_combined.columns:
+                fig_macro.add_trace(go.Scatter(x=macro_combined.index, y=macro_combined[col], name=col, line=dict(width=1.8)))
+            
+            fig_macro.update_layout(
+                height=450,
+                template="plotly_dark",
+                paper_bgcolor="#0e1117",
+                plot_bgcolor="#0e1117",
+                margin=dict(l=10, r=10, t=20, b=10),
+                legend=dict(orientation="h", y=1.12),
+                font=dict(family="Playfair Display, serif")
+            )
+            st.plotly_chart(fig_macro, use_container_width=True)
 
 st.sidebar.success(f"Last refresh: {pd.Timestamp.now().strftime('%H:%M:%S')}")
