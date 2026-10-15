@@ -23,12 +23,10 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Dark theme + Font Styles (Safely excluding all system icons & ligatures)
 st.markdown(
     """
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
     <style>
-        /* Target exact textual blocks to prevent breaking Material Icons/Ligatures */
         html, body, .stApp, p, label, .stMarkdown p, .stCaption, 
         h1, h2, h3, h4, h5, h6,
         .stTextInput input, .stSelectbox div, .stSlider div, .stCheckbox label,
@@ -37,7 +35,6 @@ st.markdown(
             font-family: 'Playfair Display', serif !important;
         }
 
-        /* HARD OVERRIDE: Restore Streamlit's icon ligatures and graphic symbols */
         span[data-testid="stIconVisibility"], 
         button div[data-testid="stMarkdownContainer"] p,
         [class*="st-emotion-cache"] svg,
@@ -54,12 +51,10 @@ st.markdown(
         h1, h2, h3, h4, h5, h6, p, label, .stMarkdown { color: #fafafa !important; }
         [data-testid="stMetricValue"] { color: #00FF7F !important; }
 
-        /* Reduce top padding */
         .block-container {
             padding-top: 1.2rem !important;
         }
 
-        /* Main Title - Playfair Display Font */
         .silver-title {
             font-family: 'Playfair Display', serif !important;
             font-size: 3.8rem;
@@ -82,7 +77,6 @@ st.markdown(
                     drop-shadow(0 0 12px rgba(255, 255, 255, 0.3));
         }
 
-        /* Subtitle - Playfair Display Font */
         .silver-subtitle {
             font-family: 'Playfair Display', serif !important;
             font-size: 2.1rem;
@@ -105,7 +99,6 @@ st.markdown(
                     drop-shadow(0 0 8px rgba(255, 255, 255, 0.25));
         }
 
-        /* Clean CSS framework for news items to remove overlapping buttons */
         .news-box {
             display: flex;
             flex-direction: column;
@@ -152,7 +145,7 @@ st.markdown(
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept": "application/json,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.5",
 }
 
@@ -168,8 +161,10 @@ RESOLUTION_MAP = {
 }
 
 
-def safe_float(value, default=0.0) -> float:
+def safe_float(value, default=None) -> Optional[float]:
     try:
+        if value is None:
+            return default
         return float(value)
     except (TypeError, ValueError):
         return default
@@ -245,7 +240,7 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ============================================================
-# 4. UNBLOCKED SECURE SYSTEM DATA EXTRACTION CORES
+# 4. DATA EXTRACTION CORES
 # ============================================================
 @st.cache_data(ttl=60, show_spinner="Fetching market data...")
 def load_ticker_data(
@@ -353,7 +348,6 @@ def get_crypto_news(cache_buster: str, max_items: int = 12) -> List[Dict]:
             feed = feedparser.parse(io.BytesIO(resp.content))
 
             for entry in feed.entries[:6]:
-                # Prefer structured datetime from feedparser
                 published_struct = entry.get("published_parsed") or entry.get("updated_parsed")
                 if published_struct:
                     try:
@@ -361,7 +355,6 @@ def get_crypto_news(cache_buster: str, max_items: int = 12) -> List[Dict]:
                     except Exception:
                         pub_dt = pd.Timestamp.utcnow()
                 else:
-                    # Fallback string parse
                     raw = entry.get("published") or entry.get("updated") or ""
                     try:
                         pub_dt = pd.to_datetime(raw, utc=True)
@@ -370,7 +363,6 @@ def get_crypto_news(cache_buster: str, max_items: int = 12) -> List[Dict]:
 
                 summary = entry.get("summary", "") or entry.get("description", "")
                 if summary:
-                    # Clean basic HTML
                     summary = (
                         summary.replace("<p>", "")
                         .replace("</p>", "")
@@ -384,13 +376,12 @@ def get_crypto_news(cache_buster: str, max_items: int = 12) -> List[Dict]:
                     "link": entry.get("link", "#"),
                     "source": source,
                     "published": pub_dt.strftime("%Y-%m-%d %H:%M UTC"),
-                    "published_dt": pub_dt,          # for sorting
+                    "published_dt": pub_dt,
                     "summary": summary,
                 })
         except Exception:
             continue
 
-    # Sort newest first using real datetime
     articles = sorted(articles, key=lambda x: x["published_dt"], reverse=True)
     return articles[:max_items]
 
@@ -450,84 +441,171 @@ def get_real_onchain(ticker: str) -> Dict[str, Any]:
     return {"Note": f"No free on-chain data found for {t}", "Source": "Free endpoints only"}
 
 
-@st.cache_data(ttl=45)
+@st.cache_data(ttl=60)
 def get_futures_metrics(ticker: str, current_price: float = 0.0) -> Dict[str, Any]:
+    """
+    Multi-source real futures metrics.
+    Tries: Bybit → Binance → OKX
+    """
     t = ticker.upper().replace("-USD", "").replace("USDT", "").replace("USD", "").strip()
-    symbol = f"{t}USDT"
+    symbol_bybit = f"{t}USDT"
+    symbol_binance = f"{t}USDT"
+    symbol_okx = f"{t}-USDT-SWAP"
+    ccy = t
 
     result = {
-        "source": "N/A",
+        "source": "None",
         "long_pct": None,
         "short_pct": None,
         "oi": None,
         "funding_rate": None,
+        "errors": [],
     }
 
-    # 1) Bybit – Open Interest + Funding Rate
+    # ---------- 1) Bybit (OI + Funding + Long/Short) ----------
     try:
         r = requests.get(
-            f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={symbol}",
+            f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={symbol_bybit}",
             headers=HEADERS,
             timeout=8,
-        ).json()
-        if r.get("retCode") == 0 and r.get("result", {}).get("list"):
-            data = r["result"]["list"][0]
-            result["oi"] = safe_float(data.get("openInterest"))
-            fr = safe_float(data.get("fundingRate"))
+        )
+        data = r.json()
+        if r.status_code == 200 and data.get("retCode") == 0 and data.get("result", {}).get("list"):
+            item = data["result"]["list"][0]
+            oi = safe_float(item.get("openInterestValue") or item.get("openInterest"))
+            if oi:
+                result["oi"] = oi
+            fr = safe_float(item.get("fundingRate"))
             if fr is not None:
-                result["funding_rate"] = fr * 100  # to percent
+                result["funding_rate"] = fr * 100
             result["source"] = "Bybit"
-    except Exception:
-        pass
+        else:
+            result["errors"].append(f"Bybit tickers: {data.get('retMsg', r.status_code)}")
+    except Exception as e:
+        result["errors"].append(f"Bybit tickers: {str(e)[:80]}")
 
-    # 2) Bybit – Real Long/Short Account Ratio
     try:
         r = requests.get(
             f"https://api.bybit.com/v5/market/account-ratio"
-            f"?category=linear&symbol={symbol}&period=1h&limit=1",
+            f"?category=linear&symbol={symbol_bybit}&period=1h&limit=1",
             headers=HEADERS,
             timeout=8,
-        ).json()
-        if r.get("retCode") == 0 and r.get("result", {}).get("list"):
-            row = r["result"]["list"][0]
+        )
+        data = r.json()
+        if r.status_code == 200 and data.get("retCode") == 0 and data.get("result", {}).get("list"):
+            row = data["result"]["list"][0]
             buy = safe_float(row.get("buyRatio"))
             sell = safe_float(row.get("sellRatio"))
             if buy is not None and sell is not None and (buy + sell) > 0:
                 total = buy + sell
                 result["long_pct"] = round(buy / total * 100, 1)
                 result["short_pct"] = round(sell / total * 100, 1)
-                result["source"] = "Bybit (Account Ratio)"
-    except Exception:
-        pass
+                result["source"] = "Bybit"
+        else:
+            result["errors"].append(f"Bybit L/S: {data.get('retMsg', r.status_code)}")
+    except Exception as e:
+        result["errors"].append(f"Bybit L/S: {str(e)[:80]}")
 
-    # 3) Fallback – Binance Global Long/Short Account Ratio
+    # ---------- 2) Binance fallback ----------
     if result["long_pct"] is None:
         try:
             r = requests.get(
                 f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio"
-                f"?symbol={symbol}&period=5m&limit=1",
+                f"?symbol={symbol_binance}&period=5m&limit=1",
                 headers=HEADERS,
                 timeout=8,
-            ).json()
-            if isinstance(r, list) and len(r) > 0:
-                row = r[0]
-                long_acc = safe_float(row.get("longAccount"))
-                short_acc = safe_float(row.get("shortAccount"))
-                if long_acc is not None and short_acc is not None:
-                    result["long_pct"] = round(long_acc * 100, 1)
-                    result["short_pct"] = round(short_acc * 100, 1)
-                    if result["source"] == "N/A":
-                        result["source"] = "Binance"
-                    else:
-                        result["source"] += " + Binance L/S"
-        except Exception:
-            pass
+            )
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, list) and len(data) > 0:
+                    row = data[0]
+                    long_acc = safe_float(row.get("longAccount"))
+                    short_acc = safe_float(row.get("shortAccount"))
+                    if long_acc is not None and short_acc is not None:
+                        result["long_pct"] = round(long_acc * 100, 1)
+                        result["short_pct"] = round(short_acc * 100, 1)
+                        result["source"] = (result["source"] + " + Binance L/S") if result["source"] != "None" else "Binance"
+            else:
+                result["errors"].append(f"Binance L/S status: {r.status_code}")
+        except Exception as e:
+            result["errors"].append(f"Binance L/S: {str(e)[:80]}")
 
-    # Final safety – only if both exchanges failed
+    if result["oi"] is None:
+        try:
+            r = requests.get(
+                f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol_binance}",
+                headers=HEADERS,
+                timeout=6,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                oi = safe_float(data.get("openInterest"))
+                if oi:
+                    result["oi"] = oi
+                    if result["source"] == "None":
+                        result["source"] = "Binance"
+        except Exception as e:
+            result["errors"].append(f"Binance OI: {str(e)[:60]}")
+
+    # ---------- 3) OKX fallback ----------
+    if result["long_pct"] is None or result["oi"] is None or result["funding_rate"] is None:
+        try:
+            if result["long_pct"] is None:
+                r = requests.get(
+                    f"https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio"
+                    f"?ccy={ccy}&period=1H",
+                    headers=HEADERS,
+                    timeout=8,
+                )
+                data = r.json()
+                if data.get("code") == "0" and data.get("data"):
+                    latest = data["data"][-1]
+                    ratio = safe_float(latest[1])
+                    if ratio and ratio > 0:
+                        long_pct = (ratio / (1 + ratio)) * 100
+                        short_pct = 100 - long_pct
+                        result["long_pct"] = round(long_pct, 1)
+                        result["short_pct"] = round(short_pct, 1)
+                        result["source"] = (result["source"] + " + OKX L/S") if result["source"] != "None" else "OKX"
+
+            if result["oi"] is None:
+                r = requests.get(
+                    f"https://www.okx.com/api/v5/public/open-interest?instType=SWAP&instId={symbol_okx}",
+                    headers=HEADERS,
+                    timeout=6,
+                )
+                data = r.json()
+                if data.get("code") == "0" and data.get("data"):
+                    oi = safe_float(data["data"][0].get("oiCcy") or data["data"][0].get("oi"))
+                    if oi:
+                        result["oi"] = oi
+                        if result["source"] == "None":
+                            result["source"] = "OKX"
+
+            if result["funding_rate"] is None:
+                r = requests.get(
+                    f"https://www.okx.com/api/v5/public/funding-rate?instId={symbol_okx}",
+                    headers=HEADERS,
+                    timeout=6,
+                )
+                data = r.json()
+                if data.get("code") == "0" and data.get("data"):
+                    fr = safe_float(data["data"][0].get("fundingRate"))
+                    if fr is not None:
+                        result["funding_rate"] = fr * 100
+                        if result["source"] == "None":
+                            result["source"] = "OKX"
+        except Exception as e:
+            result["errors"].append(f"OKX: {str(e)[:80]}")
+
+    # ---------- Final fallback ----------
     if result["long_pct"] is None:
         result["long_pct"] = 50.0
         result["short_pct"] = 50.0
-        result["source"] = (result["source"] or "N/A") + " (L/S fallback 50/50)"
+        result["source"] = (result["source"] if result["source"] != "None" else "N/A") + " (L/S 50/50 fallback)"
+
+    if result["source"] == "None":
+        result["source"] = "All sources failed"
 
     return result
 
@@ -554,7 +632,7 @@ def load_macro_data() -> Dict[str, pd.DataFrame]:
 
 
 # ============================================================
-# 5. INDUSTRIAL SUBPLOT CHART BUILDING ENGINE
+# 5. CHART BUILDING ENGINE
 # ============================================================
 def build_asset_chart(
     h_data: pd.DataFrame,
@@ -706,7 +784,7 @@ def build_asset_chart(
 
 
 # ============================================================
-# 6. SIDEBAR CONTROLS & SELECTIONS
+# 6. SIDEBAR CONTROLS
 # ============================================================
 st.sidebar.header("Controls")
 t_raw = st.sidebar.text_input("Enter Tickers (commas):", value="BTC-USD, ETH-USD, SOL-USD, XRP-USD")
@@ -740,7 +818,7 @@ is_6h = res_cfg["is_6h"]
 st_autorefresh(interval=rf_rate * 1000, key="datarefresh")
 
 # ============================================================
-# 7. CORE COMPROMISE LAYOUT ENGINE WORKSPACE
+# 7. MAIN LAYOUT
 # ============================================================
 st.markdown('<div class="silver-title">OneStop-InfoSpot</div>', unsafe_allow_html=True)
 st.markdown('<div class="silver-subtitle">📈 Asset Intelligence Terminal</div>', unsafe_allow_html=True)
@@ -749,9 +827,6 @@ st.caption("Dark mode • Candlesticks • Long/Short Allocation • Open Intere
 
 tab_crypto, tab_macro = st.tabs(["⚡ Crypto Intelligence Terminal", "🌐 Global Macro Insights"])
 
-# ------------------------------------------------------------
-# TAB 1: CRYPTO INTELLIGENCE MODULE WORKSPACE
-# ------------------------------------------------------------
 with tab_crypto:
     if not tkrs:
         st.info("Enter at least one ticker in the sidebar.")
@@ -792,11 +867,14 @@ with tab_crypto:
                 delta = ((c_px - p_px) / p_px) * 100
 
                 fut = get_futures_metrics(t, current_price=c_px)
-                long_r = fut["long_pct"]
-                short_r = fut["short_pct"]
+                long_r = fut["long_pct"] if fut["long_pct"] is not None else 50.0
+                short_r = fut["short_pct"] if fut["short_pct"] is not None else 50.0
                 oi_val = fut["oi"]
                 funding = fut["funding_rate"]
                 source_label = fut["source"]
+
+                if fut.get("errors"):
+                    source_label += f" | errs: {len(fut['errors'])}"
 
                 liquidity_profiles[t] = {
                     "price": c_px,
@@ -906,7 +984,8 @@ with tab_crypto:
                 levels = [p["25x_l"], p["50x_l"], p["100x_l"], p["price"], p["100x_s"], p["50x_s"], p["25x_s"]]
                 labels = ["25x Long Liq", "50x Long Liq", "100x Long Liq", "Current Price",
                           "100x Short Liq", "50x Short Liq", "25x Short Liq"]
-                fig_map = go.Figure(go.Bar(x=labels, y=levels, text=[f"${v:,.2f}" for v in levels], textposition="auto", marker=dict(color=levels, colorscale="Portland")))
+                fig_map = go.Figure(go.Bar(x=labels, y=levels, text=[f"${v:,.2f}" for v in levels], textposition="auto",
+                                           marker=dict(color=levels, colorscale="Portland")))
                 fig_map.update_layout(height=340, template="plotly_dark",
                                       paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
                                       font=dict(family="Playfair Display, serif"))
@@ -916,6 +995,15 @@ with tab_crypto:
             st.caption("Long/Short Account Ratio • Open Interest • Funding Rate Matrix")
             if futures_table_rows:
                 st.dataframe(pd.DataFrame(futures_table_rows).set_index("Ticker"), use_container_width=True)
+
+            # Debug expander so you can see exactly what each source returned
+            with st.expander("🔧 Debug Futures Sources (click to expand)"):
+                for t in list(data.keys())[:6]:
+                    dbg = get_futures_metrics(t)
+                    st.write(f"**{t}** → Source: `{dbg['source']}`")
+                    st.write(f"Long: {dbg['long_pct']}% | Short: {dbg['short_pct']}% | OI: {dbg['oi']} | Funding: {dbg['funding_rate']}")
+                    if dbg.get("errors"):
+                        st.warning("Errors: " + " | ".join(dbg["errors"]))
 
             st.subheader("📊 Long vs Short Allocation")
             if liquidity_profiles:
@@ -949,7 +1037,6 @@ with tab_crypto:
 
             with col1:
                 st.subheader("📰 Live Crypto News")
-                # More aggressive cache buster (seconds) so news refreshes properly
                 pulse_key = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
                 news = get_crypto_news(cache_buster=pulse_key)
                 if news:
@@ -982,9 +1069,6 @@ with tab_crypto:
                 fng_v, fng_c = get_fear_greed()
                 st.metric("Fear & Greed Index", f"{fng_v}/100", fng_c)
 
-# ------------------------------------------------------------
-# TAB 2: GLOBAL MACRO INSIGHTS WORKSPACE
-# ------------------------------------------------------------
 with tab_macro:
     st.subheader("🌐 Broad Market Telemetry Framework")
     st.caption("Asynchronous tracking layer pulling multi-asset global correlations over a rolling 90-day window.")
