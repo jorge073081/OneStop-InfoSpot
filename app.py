@@ -359,7 +359,7 @@ def get_real_onchain(ticker: str) -> Dict[str, Any]:
                 "https://api.blockchain.info/charts/n-unique-addresses?timespan=5days&format=json",
                 headers=HEADERS, timeout=10,
             ).json()
-            latest_addr = int(addr_resp["values"][-1]["y"]) if addr_resp.get("values') else "N/A"
+            latest_addr = int(addr_resp["values"][-1]["y"]) if addr_resp.get("values") else "N/A"
             hash_rate_ehs = stats.get("hash_rate", 0) / 1e9
             return {
                 "Network": "Bitcoin",
@@ -429,27 +429,27 @@ def get_real_onchain(ticker: str) -> Dict[str, Any]:
         pass
 
     try:
-        cg_ids = {
+        slug_map = {
             "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "XRP": "ripple",
             "ADA": "cardano", "AVAX": "avalanche-2", "DOT": "polkadot", "DOGE": "dogecoin",
             "LINK": "chainlink", "ONDO": "ondo-finance", "NEAR": "near", "ATOM": "cosmos",
             "SUI": "sui", "APT": "aptos",
         }
-        cg_id = cg_ids.get(t, t.lower())
+        slug = slug_map.get(t, t.lower())
         url = (
             f"https://api.coingecko.com/api/v3/simple/price"
-            f"?ids={cg_id}&vs_currencies=usd&include_market_cap=true&include_24hr_vol=true"
+            f"?ids={slug}&vs_currencies=usd&include_market_cap=true&include_24hr_vol=true"
         )
         r = requests.get(url, headers=HEADERS, timeout=10)
         if r.status_code == 200:
             data = r.json()
-            if cg_id in data:
-                d = data[cg_id]
+            if slug in data:
+                d = data[slug]
                 return {
                     "Asset": t,
                     "Price (USD)": f"${d.get('usd', 0):,.4f}",
-                    "Market Cap": f"${d.get('usd_market_cap', 0):,.0f}" if d.get("usd_market_cap") else "N/A",
-                    "24h Volume": f"${d.get('usd_24h_vol', 0):,.0f}" if d.get("usd_24h_vol") else "N/A",
+                    "Market Cap": f"${d.get('usd_market_cap', 0):,.0f}" if d.get('usd_market_cap') else "N/A",
+                    "24h Volume": f"${d.get('usd_24h_vol', 0):,.0f}" if d.get('usd_24h_vol') else "N/A",
                     "Source": "CoinGecko (keyless free)",
                 }
     except Exception as e:
@@ -478,7 +478,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
             headers=HEADERS, timeout=8,
         )
         if r.status_code == 200 and r.json():
-            data = r.json()[0]
+            data = r.json()
             long_acc = safe_float(data.get("longAccount"), 0.5)
             short_acc = safe_float(data.get("shortAccount"), 0.5)
             total = long_acc + short_acc
@@ -517,7 +517,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r.status_code == 200:
             data = r.json()
             if data.get("retCode") == 0 and data.get("result", {}).get("list"):
-                item = data["result"]["list"][0]
+                item = data["result"]["list"]
                 buy_ratio = safe_float(item.get("buyRatio"), 0.5)
                 sell_ratio = safe_float(item.get("sellRatio"), 0.5)
                 total = buy_ratio + sell_ratio
@@ -533,7 +533,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r2.status_code == 200:
             data = r2.json()
             if data.get("retCode") == 0 and data.get("result", {}).get("list"):
-                oi = safe_float(data["result"]["list"][0].get("openInterest"))
+                oi = safe_float(data["result"]["list"].get("openInterest"))
                 if oi > 0:
                     result["oi"] = oi
 
@@ -544,7 +544,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r3.status_code == 200:
             data = r3.json()
             if data.get("retCode") == 0 and data.get("result", {}).get("list"):
-                fr = safe_float(data["result"]["list"][0].get("fundingRate"))
+                fr = safe_float(data["result"]["list"].get("fundingRate"))
                 result["funding_rate"] = fr * 100
 
         if result["source"] == "Bybit":
@@ -560,8 +560,8 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r.status_code == 200:
             data = r.json()
             if data.get("code") == "0" and data.get("data"):
-                item = data["data"][0]
-                ratio = safe_float(item[1] if len(item) > 1 else 1.0)
+                item = data["data"]
+                ratio = safe_float(item if len(item) > 1 else 1.0)
                 long_pct = round(ratio / (1 + ratio) * 100, 1)
                 result["long_pct"] = long_pct
                 result["short_pct"] = round(100 - long_pct, 1)
@@ -574,7 +574,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r2.status_code == 200:
             data = r2.json()
             if data.get("code") == "0" and data.get("data"):
-                oi = safe_float(data["data"][0].get("oi"))
+                oi = safe_float(data["data"].get("oi"))
                 if oi > 0:
                     result["oi"] = oi
 
@@ -585,7 +585,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r3.status_code == 200:
             data = r3.json()
             if data.get("code") == "0" and data.get("data"):
-                fr = safe_float(data["data"][0].get("fundingRate"))
+                fr = safe_float(data["data"].get("fundingRate"))
                 result["funding_rate"] = fr * 100
 
         if result["source"] == "OKX":
