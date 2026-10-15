@@ -667,8 +667,6 @@ def build_asset_chart(
     if show_baseline and "baseline" in h_data.columns:
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["baseline"], name="Hist. Baseline (Avg)",
                                  line=dict(color="#FFD700", width=1.8, dash="dot")), row=current_row, col=1)
-    if show_vwap Image may be text down inside block:
-        pass
     if show_vwap and "vwap" in h_data.columns:
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["vwap"], name="VWAP",
                                  line=dict(color="#FF00FF", width=1.6)), row=current_row, col=1)
@@ -977,7 +975,6 @@ with col1:
         sia = SIA()
         for art in news:
             with st.expander(art["title"]):
-                # Isolated layout using raw HTML blocks to completely guard against text overlapping
                 score = sia.polarity_scores(art["title"])["compound"]
                 if score >= 0.05:
                     status_badge = '<span style="color:#00FF7F; font-weight:bold;">Bullish</span>'
@@ -989,12 +986,12 @@ with col1:
                 html_body = f"""
                 <div class="news-container">
                     <p style="margin: 0 0 4px 0; font-size: 0.9rem; color: #a0a0a0;">
-                        <strong>{art['source']}</strong> • {art['published']} • Sentiment: {status_badge} ({score:+.2f})
+                        <strong>{{art['source']}}</strong> • {{art['published']}} • Sentiment: {{status_badge}} ({{score:+.2f}})
                     </p>
-                    <p style="margin: 0; font-size: 1.05rem; color: #fafafa;">{art['summary'] if art['summary'] else ''}</p>
-                    <a href="{art['link']}" target="_blank" class="news-link-btn">Open Article ↗</a>
+                    <p style="margin: 0; font-size: 1.05rem; color: #fafafa;">{{art['summary'] if art['summary'] else ''}}</p>
+                    <a href="{{art['link']}}" target="_blank" class="news-link-btn">Open Article ↗</a>
                 </div>
-                """
+                """.replace("{{art['source']}}", str(art['source'])).replace("{{art['published']}}", str(art['published'])).replace("{{status_badge}}", status_badge).replace("{{score:+.2f}}", f"{score:+.2f}").replace("{{art['summary'] if art['summary'] else ''}}", str(art['summary'] if art['summary'] else '')).replace("{{art['link']}}", str(art['link']))
                 st.markdown(html_body, unsafe_allow_html=True)
 
 with col2:
