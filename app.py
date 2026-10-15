@@ -27,17 +27,27 @@ st.markdown(
     """
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
     <style>
-        /* Global font = Playfair Display */
+        /* Global typography tracking applied exclusively to standard textual elements */
         html, body, .stApp, .stMarkdown, p, label, span, div,
         h1, h2, h3, h4, h5, h6,
         .stTextInput > div > div > input,
         .stSelectbox, .stSlider, .stCheckbox,
         [data-testid="stMetricValue"],
         [data-testid="stMetricLabel"],
-        [data-testid="stSidebar"],
         button, .stButton > button,
-        .stCaption {
+        .stCaption, .stExpander {
             font-family: 'Playfair Display', serif !important;
+        }
+
+        /* CRITICAL FIX: Explicitly exclude material icons, svgs, and button icon components from font-family conversion */
+        [class*="material-icons"], 
+        [class*="MaterialIcons"], 
+        span[class*="icon"],
+        svg, path, i,
+        [data-testid="stIconVisibility"],
+        [data-testid="collapsedControlSidebar"] button,
+        [data-testid="stSidebarCollapseButton"] button {
+            font-family: inherit !important;
         }
 
         .stApp { background-color: #0e1117; color: #fafafa; }
@@ -50,51 +60,7 @@ st.markdown(
             padding-top: 1.2rem !important;
         }
 
-        /* Fix Live Crypto News overlapping & separate the 'Read →' link */
-        .stExpander, .stExpander div, .stExpander p, .stExpander span {
-            font-family: 'Playfair Display', serif !important;
-            line-height: 1.6 !important;
-        }
-        .stExpander p {
-            margin-bottom: 0.8rem !important;
-        }
-        .crypto-news-link {
-            display: inline-block !important;
-            margin-top: 0.7rem !important;
-            padding: 4px 8px !important;
-            background-color: #1a1d24 !important;
-            color: #00FFFF !important;
-            border-radius: 4px !important;
-            text-decoration: none !important;
-            border: 1px solid #30363d !important;
-        }
-        .crypto-news-link:hover {
-            background-color: #30363d !important;
-            color: #ffffff !important;
-        }
-
-        /* Fix Top Left Control Panel Expand Button */
-        [data-testid="collapsedControlSidebar"] button {
-            background-color: #1a1d24 !important;
-            border: 1px solid #30363d !important;
-            border-radius: 6px !important;
-            padding: 0.5rem 1rem !important;
-            color: #fafafa !important;
-            font-family: 'Playfair Display', serif !important;
-            font-weight: 600 !important;
-            box-shadow: 0px 4px 10px rgba(0,0,0,0.3) !important;
-            display: inline-flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            transition: all 0.2s ease !important;
-        }
-        [data-testid="collapsedControlSidebar"] button:hover {
-            background-color: #30363d !important;
-            border-color: #00FF7F !important;
-            cursor: pointer !important;
-        }
-
-        /* Main Title - Playfair Font instead of Script to match rules */
+        /* Main Title - Playfair Display Font */
         .silver-title {
             font-family: 'Playfair Display', serif !important;
             font-size: 3.8rem;
@@ -119,7 +85,7 @@ st.markdown(
                     drop-shadow(0 0 12px rgba(255, 255, 255, 0.3));
         }
 
-        /* Subtitle */
+        /* Subtitle - Playfair Display Font */
         .silver-subtitle {
             font-family: 'Playfair Display', serif !important;
             font-size: 2.1rem;
@@ -142,6 +108,45 @@ st.markdown(
 
             filter: drop-shadow(0 0 4px rgba(192, 192, 192, 0.6))
                     drop-shadow(0 0 8px rgba(255, 255, 255, 0.25));
+        }
+
+        /* Custom Styles for Crypto News Container to Prevent Text and Button Overlaps */
+        .crypto-news-container {
+            margin-bottom: 1.5rem;
+            padding-bottom: 0.5rem;
+        }
+        
+        .crypto-news-meta {
+            color: #8a92a6 !important;
+            font-size: 0.85rem !important;
+            margin-bottom: 0.5rem !important;
+        }
+
+        .crypto-news-summary {
+            font-size: 0.95rem !important;
+            line-height: 1.6 !important;
+            color: #fafafa !important;
+            margin-bottom: 1rem !important;
+        }
+
+        .crypto-news-button {
+            display: inline-block !important;
+            background-color: #1e293b !important;
+            color: #00FFFF !important;
+            padding: 6px 14px !important;
+            border-radius: 4px !important;
+            text-decoration: none !important;
+            font-size: 0.85rem !important;
+            font-weight: 600 !important;
+            border: 1px solid #334155 !important;
+            transition: all 0.2s ease !important;
+            margin-top: 0.5rem !important;
+        }
+
+        .crypto-news-button:hover {
+            background-color: #334155 !important;
+            color: #ffffff !important;
+            border-color: #00FFFF !important;
         }
     </style>
     """,
@@ -424,13 +429,13 @@ def get_real_onchain(ticker: str) -> Dict[str, Any]:
         pass
 
     try:
-        cg_ids = {
+        slug_map = {
             "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "XRP": "ripple",
             "ADA": "cardano", "AVAX": "avalanche-2", "DOT": "polkadot", "DOGE": "dogecoin",
             "LINK": "chainlink", "ONDO": "ondo-finance", "NEAR": "near", "ATOM": "cosmos",
             "SUI": "sui", "APT": "aptos",
         }
-        cg_id = cg_ids.get(t, t.lower())
+        cg_id = slug_map.get(t, t.lower())
         url = (
             f"https://api.coingecko.com/api/v3/simple/price"
             f"?ids={cg_id}&vs_currencies=usd&include_market_cap=true&include_24hr_vol=true"
@@ -684,7 +689,7 @@ def build_asset_chart(
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["sma200"], name="SMA 200",
                                  line=dict(color="#FF4500", width=1.5)), row=current_row, col=1)
     if show_baseline and "baseline" in h_data.columns:
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["baseline"], name="Hist. Baseline (Period Avg)",
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["baseline"], name="Hist. Baseline (Avg)",
                                  line=dict(color="#FFD700", width=1.8, dash="dot")), row=current_row, col=1)
     if show_vwap and "vwap" in h_data.columns:
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["vwap"], name="VWAP",
@@ -994,19 +999,27 @@ with col1:
         sia = SIA()
         for art in news:
             with st.expander(art["title"]):
-                st.markdown(f"**{art['source']}** • {art['published']}")
-                if art["summary"]:
-                    st.write(art["summary"])
+                # CRITICALLY FIXED: Clean HTML mapping container to permanently eliminate overlapping layout tags
                 score = sia.polarity_scores(art["title"])["compound"]
                 if score >= 0.05:
-                    st.success(f"Bullish ({score:+.2f})")
+                    status_badge = '<span style="color:#00FF7F; font-weight:bold;">Bullish ({:+.2f})</span>'.format(score)
                 elif score <= -0.05:
-                    st.error(f"Bearish ({score:+.2f})")
+                    status_badge = '<span style="color:#FF4500; font-weight:bold;">Bearish ({:+.2f})</span>'.format(score)
                 else:
-                    st.info(f"Neutral ({score:+.2f})")
+                    status_badge = '<span style="color:#00FFFF; font-weight:bold;">Neutral ({:+.2f})</span>'.format(score)
                 
-                # Render clean clickable element completely un-impacted by global line-height text bounds
-                st.markdown(f'<a href="{art["link"]}" target="_blank" class="crypto-news-link">Open Article ↗</a>', unsafe_allow_html=True)
+                summary_text = art["summary"] if art["summary"] else "No preview summary available."
+                
+                st.markdown(
+                    """
+                    <div class="crypto-news-container">
+                        <div class="crypto-news-meta"><strong>{}</strong> • {} • {}</div>
+                        <div class="crypto-news-summary">{}</div>
+                        <a class="crypto-news-button" href="{}" target="_blank">Open Article ↗</a>
+                    </div>
+                    """.format(art['source'], art['published'], status_badge, summary_text, art['link']),
+                    unsafe_allow_html=True
+                )
 
 with col2:
     st.subheader("📊 Sentiment")
