@@ -140,7 +140,7 @@ st.markdown(
             font-size: 0.95rem;
             font-weight: bold;
             border: 1px solid #3b4252;
-            transition: all 0.2s ease-index;
+            transition: all 0.2s ease-in-out;
         }
         
         .news-action-link:hover {
@@ -177,11 +177,21 @@ def safe_float(value, default=0.0) -> float:
         return default
 
 
-def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+def normalize_columns(df: pd.DataFrame, target_ticker: Optional[str] = None) -> pd.DataFrame:
     if df is None or df.empty:
         return df
+    
+    df = df.copy()
+    
+    # Handle yfinance multi-index layouts gracefully
     if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
+        if target_ticker and target_ticker in df.columns.get_level_values(1):
+            df = df.xs(target_ticker, axis=1, level=1)
+        elif target_ticker and target_ticker in df.columns.get_level_values(0):
+            df = df.xs(target_ticker, axis=1, level=0)
+        else:
+            df.columns = df.columns.get_level_values(0)
+            
     df.columns = [str(c).lower() for c in df.columns]
     if df.index.tz is not None:
         df.index = df.index.tz_localize(None)
@@ -251,7 +261,7 @@ def load_ticker_data(
             hist = yf.Ticker(t).history(period=period, interval=interval, auto_adjust=True)
             if hist.empty:
                 continue
-            hist = normalize_columns(hist)
+            hist = normalize_columns(hist, target_ticker=t)
 
             if is_6h:
                 hist = (
@@ -278,7 +288,7 @@ def load_ticker_data(
 def get_long_term_avg(ticker: str) -> Optional[float]:
     try:
         hist = yf.Ticker(ticker).history(period="1y", interval="1d", auto_adjust=True)
-        hist = normalize_columns(hist)
+        hist = normalize_columns(hist, target_ticker=ticker)
         if hist.empty or "close" not in hist.columns:
             return None
         return float(hist["close"].mean())
@@ -292,7 +302,7 @@ def get_daily_pivots(tickers: Tuple[str, ...]) -> Dict[str, Dict[str, float]]:
     for t in tickers:
         try:
             daily = yf.Ticker(t).history(period="10d", interval="1d", auto_adjust=True)
-            daily = normalize_columns(daily)
+            daily = normalize_columns(daily, target_ticker=t)
             if len(daily) < 2:
                 continue
             prev = daily.iloc[-2]
@@ -315,7 +325,6 @@ def get_fear_greed() -> Tuple[str, str]:
     try:
         res = requests.get("https://api.alternative.me/fng/", headers=HEADERS, timeout=8).json()
         data = res["data"]
-        # FIXED: alternative.me returns a list under the 'data' key. Extract index 0 safely.
         if isinstance(data, list) and len(data) > 0:
             return data[0]["value"], data[0]["value_classification"]
         return "N/A", "Unavailable"
@@ -481,7 +490,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
             headers=HEADERS, timeout=8,
         )
         if r.status_code == 200 and r.json():
-            data = r.json()[0]  # FIXED: Unpack first chronological dict from array list
+            data = r.json()[0]  
             long_acc = safe_float(data.get("longAccount"), 0.5)
             short_acc = safe_float(data.get("shortAccount"), 0.5)
             total = long_acc + short_acc
@@ -520,7 +529,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r.status_code == 200:
             data = r.json()
             if data.get("retCode") == 0 and data.get("result", {}).get("list"):
-                item = data["result"]["list"][0]  # FIXED: Target correct element payload index dictionary offset
+                item = data["result"]["list"][0]  
                 buy_ratio = safe_float(item.get("buyRatio"), 0.5)
                 sell_ratio = safe_float(item.get("sellRatio"), 0.5)
                 total = buy_ratio + sell_ratio
@@ -536,7 +545,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r2.status_code == 200:
             data = r2.json()
             if data.get("retCode") == 0 and data.get("result", {}).get("list"):
-                oi = safe_float(data["result"]["list"][0].get("openInterest")) # FIXED: Unpack internal arrays
+                oi = safe_float(data["result"]["list"][0].get("openInterest")) 
                 if oi > 0:
                     result["oi"] = oi
 
@@ -547,7 +556,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r3.status_code == 200:
             data = r3.json()
             if data.get("retCode") == 0 and data.get("result", {}).get("list"):
-                fr = safe_float(data["result"]["list"][0].get("fundingRate")) # FIXED: Access internal arrays
+                fr = safe_float(data["result"]["list"][0].get("fundingRate")) 
                 result["funding_rate"] = fr * 100
 
         if result["source"] == "Bybit":
@@ -563,7 +572,6 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r.status_code == 200:
             data = r.json()
             if data.get("code") == "0" and data.get("data"):
-                # FIXED: Handle OKX response properly as it can be a list of lists or lists of dicts
                 item = data["data"][0]
                 if isinstance(item, list) and len(item) > 1:
                     ratio = safe_float(item[1])
@@ -583,7 +591,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r2.status_code == 200:
             data = r2.json()
             if data.get("code") == "0" and data.get("data"):
-                oi = safe_float(data["data"][0].get("oi")) # FIXED: Unpack internal lists
+                oi = safe_float(data["data"][0].get("oi")) 
                 if oi > 0:
                     result["oi"] = oi
 
@@ -594,7 +602,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r3.status_code == 200:
             data = r3.json()
             if data.get("code") == "0" and data.get("data"):
-                fr = safe_float(data["data"][0].get("fundingRate")) # FIXED: Unpack internal lists
+                fr = safe_float(data["data"][0].get("fundingRate")) 
                 result["funding_rate"] = fr * 100
 
         if result["source"] == "OKX":
@@ -623,7 +631,7 @@ def load_macro_data() -> Dict[str, pd.DataFrame]:
         try:
             m_hist = yf.Ticker(sym).history(period="3mo", interval="1d", auto_adjust=True)
             if not m_hist.empty:
-                macro_results[label] = normalize_columns(m_hist)
+                macro_results[label] = normalize_columns(m_hist, target_ticker=sym)
         except Exception:
             continue
     return macro_results
