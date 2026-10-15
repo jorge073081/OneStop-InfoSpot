@@ -22,29 +22,30 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Dark theme + Selective Fonts (Excluding UI Icon Elements)
+# Dark theme + Font Styles (Safely excluding all system icons & ligatures)
 st.markdown(
     """
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
     <style>
-        /* Base Global Typography assigned to explicit readable containers */
-        html, body, .stApp, .stMarkdown, p, label, span, div,
+        /* Target exact textual blocks to prevent breaking Material Icons/Ligatures */
+        html, body, .stApp, p, label, .stMarkdown p, .stCaption, 
         h1, h2, h3, h4, h5, h6,
-        .stTextInput > div > div > input,
-        .stSelectbox, .stSlider, .stCheckbox,
-        [data-testid="stMetricValue"],
-        [data-testid="stMetricLabel"],
-        [data-testid="stSidebar"],
-        button, .stButton > button,
-        .stCaption, .stExpander {
-            font-family: 'Playfair Display', serif;
+        .stTextInput input, .stSelectbox div, .stSlider div, .stCheckbox label,
+        [data-testid="stMetricValue"], [data-testid="stMetricLabel"],
+        .stDataFrame, table, th, td {
+            font-family: 'Playfair Display', serif !important;
         }
 
-        /* STRICT EXCLUSIONS: Prevent Playfair from breaking web utility icons / ligatures */
-        svg, i, span[class*="icon"], [class*="st-"], [class*="stIcon"], 
-        [data-testid="stIconVisibility"], [aria-hidden="true"], 
-        .stExpander h2 span, .stExpander svg, button svg {
-            font-family: inherit !important;
+        /* HARD OVERRIDE: Restore Streamlit's icon ligatures and graphic symbols */
+        span[data-testid="stIconVisibility"], 
+        button div[data-testid="stMarkdownContainer"] p,
+        [class*="st-emotion-cache"] svg,
+        [class*="st-emotion-cache"] i,
+        span[class*="icon"],
+        button div,
+        .stExpander h2 span,
+        [data-testid="collapsedControlSidebar"] button {
+            font-family: "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
         }
 
         .stApp { background-color: #0e1117; color: #fafafa; }
@@ -107,22 +108,45 @@ st.markdown(
                     drop-shadow(0 0 8px rgba(255, 255, 255, 0.25));
         }
 
-        /* News Link Layout Safeguards */
-        .news-container {
-            margin-top: 5px;
-            padding-bottom: 5px;
-            line-height: 1.6;
+        /* Clean CSS framework for news items to remove overlapping buttons */
+        .news-box {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding: 10px 0;
+            width: 100%;
         }
         
-        .news-link-btn {
-            display: inline-block;
-            margin-top: 8px;
-            color: #00FFFF !important;
-            text-decoration: none !important;
-            font-weight: 500;
+        .news-meta {
+            font-size: 0.9rem;
+            color: #a0a0a0;
+            margin: 0;
         }
-        .news-link-btn:hover {
-            color: #00FF7F !important;
+
+        .news-summary {
+            font-size: 1.05rem;
+            color: #fafafa;
+            line-height: 1.6;
+            margin: 0;
+        }
+        
+        .news-action-link {
+            align-self: flex-start;
+            background-color: #1f242d;
+            color: #00FFFF !important;
+            padding: 6px 14px;
+            border-radius: 4px;
+            text-decoration: none !important;
+            font-size: 0.95rem;
+            font-weight: bold;
+            border: 1px solid #3b4252;
+            transition: all 0.2s ease-index;
+        }
+        
+        .news-action-link:hover {
+            background-color: #00FF7F;
+            color: #0e1117 !important;
+            border-color: #00FF7F;
         }
     </style>
     """,
@@ -983,15 +1007,16 @@ with col1:
                 else:
                     status_badge = '<span style="color:#00FFFF; font-weight:bold;">Neutral</span>'
                 
+                # Raw layout entirely detached from native markdown blocks to prevent overlapping words
                 html_body = f"""
-                <div class="news-container">
-                    <p style="margin: 0 0 4px 0; font-size: 0.9rem; color: #a0a0a0;">
-                        <strong>{{art['source']}}</strong> • {{art['published']}} • Sentiment: {{status_badge}} ({{score:+.2f}})
+                <div class="news-box">
+                    <p class="news-meta">
+                        <strong>{art['source']}</strong> • {art['published']} • Sentiment: {status_badge} ({score:+.2f})
                     </p>
-                    <p style="margin: 0; font-size: 1.05rem; color: #fafafa;">{{art['summary'] if art['summary'] else ''}}</p>
-                    <a href="{{art['link']}}" target="_blank" class="news-link-btn">Open Article ↗</a>
+                    <p class="news-summary">{art['summary'] if art['summary'] else ''}</p>
+                    <a href="{art['link']}" target="_blank" class="news-action-link">Open Article ↗</a>
                 </div>
-                """.replace("{{art['source']}}", str(art['source'])).replace("{{art['published']}}", str(art['published'])).replace("{{status_badge}}", status_badge).replace("{{score:+.2f}}", f"{score:+.2f}").replace("{{art['summary'] if art['summary'] else ''}}", str(art['summary'] if art['summary'] else '')).replace("{{art['link']}}", str(art['link']))
+                """
                 st.markdown(html_body, unsafe_allow_html=True)
 
 with col2:
