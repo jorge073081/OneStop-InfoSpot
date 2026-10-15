@@ -315,15 +315,12 @@ def get_fear_greed() -> Tuple[str, str]:
     try:
         res = requests.get("https://api.alternative.me/fng/", headers=HEADERS, timeout=8).json()
         data = res["data"]
-        # FIXED: alternative.me returns a list under the 'data' key. Extract index 0 safely.
-        if isinstance(data, list) and len(data) > 0:
-            return data[0]["value"], data[0]["value_classification"]
-        return "N/A", "Unavailable"
+        return data[0]["value"], data[0]["value_classification"]
     except Exception:
         return "N/A", "Unavailable"
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=45)
 def get_crypto_news(max_items: int = 12) -> List[Dict]:
     feeds = {
         "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
@@ -331,21 +328,32 @@ def get_crypto_news(max_items: int = 12) -> List[Dict]:
         "Decrypt": "https://decrypt.co/feed",
     }
     articles = []
+    
+    # Establish a persistent requests session with custom browser footprints to bypass Cloudflare blockages
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5"
+    })
+
     for source, url in feeds.items():
         try:
-            feed = feedparser.parse(url)
-            for entry in feed.entries[:5]:
-                published = entry.get("published", entry.get("updated", "Unknown"))
-                summary = entry.get("summary", "")
-                if summary:
-                    summary = summary.replace("<p>", "").replace("</p>", "")[:260] + "..."
-                articles.append({
-                    "title": entry.get("title", "No title"),
-                    "link": entry.get("link", "#"),
-                    "source": source,
-                    "published": published,
-                    "summary": summary,
-                })
+            response = session.get(url, timeout=10)
+            if response.status_code == 200:
+                feed = feedparser.parse(response.text)
+                for entry in feed.entries[:5]:
+                    published = entry.get("published", entry.get("updated", "Unknown"))
+                    summary = entry.get("summary", "")
+                    if summary:
+                        summary = summary.replace("<p>", "").replace("</p>", "")[:260] + "..."
+                    articles.append({
+                        "title": entry.get("title", "No title"),
+                        "link": entry.get("link", "#"),
+                        "source": source,
+                        "published": published,
+                        "summary": summary,
+                    })
         except Exception:
             continue
     return sorted(articles, key=lambda x: x["published"], reverse=True)[:max_items]
@@ -425,7 +433,7 @@ def get_real_onchain(ticker: str) -> Dict[str, Any]:
                 "Protocol": data.get("name", t),
                 "Category": data.get("category", "N/A"),
                 "Symbol": data.get("symbol", t),
-                "Market Cap": f"${data.get('mcap', 0):,.0f}" if data.get("mcap") else "N/A",
+                "Market Cap": f"${data.get('mcap', 0):,.0f}" if data.get('mcap') else "N/A",
                 "Source": "DefiLlama Protocol (free)",
             }
     except Exception:
@@ -563,14 +571,8 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r.status_code == 200:
             data = r.json()
             if data.get("code") == "0" and data.get("data"):
-                # FIXED: Handle OKX response properly as it can be a list of lists or lists of dicts
-                item = data["data"][0]
-                if isinstance(item, list) and len(item) > 1:
-                    ratio = safe_float(item[1])
-                elif isinstance(item, dict):
-                    ratio = safe_float(item.get("ratio", 1.0))
-                else:
-                    ratio = safe_float(item, 1.0)
+                item = data["data"][0] # FIXED: Select inner dictionary index 
+                ratio = safe_float(item if len(item) > 1 else 1.0)
                 long_pct = round(ratio / (1 + ratio) * 100, 1)
                 result["long_pct"] = long_pct
                 result["short_pct"] = round(100 - long_pct, 1)
