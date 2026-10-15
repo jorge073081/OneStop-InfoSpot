@@ -443,18 +443,13 @@ def get_real_onchain(ticker: str) -> Dict[str, Any]:
 
 @st.cache_data(ttl=60)
 def get_futures_metrics(ticker: str, current_price: float = 0.0) -> Dict[str, Any]:
-    """
-    Multi-source real futures metrics.
-    Tries: Bybit → Binance → OKX
-    """
+    """OKX-only futures metrics (Bybit/Binance are geo-blocked on this host)."""
     t = ticker.upper().replace("-USD", "").replace("USDT", "").replace("USD", "").strip()
-    symbol_bybit = f"{t}USDT"
-    symbol_binance = f"{t}USDT"
     symbol_okx = f"{t}-USDT-SWAP"
     ccy = t
 
     result = {
-        "source": "None",
+        "source": "OKX",
         "long_pct": None,
         "short_pct": None,
         "oi": None,
@@ -462,150 +457,56 @@ def get_futures_metrics(ticker: str, current_price: float = 0.0) -> Dict[str, An
         "errors": [],
     }
 
-    # ---------- 1) Bybit (OI + Funding + Long/Short) ----------
     try:
+        # Long / Short Account Ratio
         r = requests.get(
-            f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={symbol_bybit}",
+            f"https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio"
+            f"?ccy={ccy}&period=1H",
             headers=HEADERS,
             timeout=8,
         )
         data = r.json()
-        if r.status_code == 200 and data.get("retCode") == 0 and data.get("result", {}).get("list"):
-            item = data["result"]["list"][0]
-            oi = safe_float(item.get("openInterestValue") or item.get("openInterest"))
+        if data.get("code") == "0" and data.get("data"):
+            latest = data["data"][-1]
+            ratio = safe_float(latest[1])
+            if ratio and ratio > 0:
+                long_pct = (ratio / (1 + ratio)) * 100
+                result["long_pct"] = round(long_pct, 1)
+                result["short_pct"] = round(100 - long_pct, 1)
+
+        # Open Interest
+        r = requests.get(
+            f"https://www.okx.com/api/v5/public/open-interest?instType=SWAP&instId={symbol_okx}",
+            headers=HEADERS,
+            timeout=6,
+        )
+        data = r.json()
+        if data.get("code") == "0" and data.get("data"):
+            oi = safe_float(data["data"][0].get("oiCcy") or data["data"][0].get("oi"))
             if oi:
                 result["oi"] = oi
-            fr = safe_float(item.get("fundingRate"))
-            if fr is not None:
-                result["funding_rate"] = fr * 100
-            result["source"] = "Bybit"
-        else:
-            result["errors"].append(f"Bybit tickers: {data.get('retMsg', r.status_code)}")
-    except Exception as e:
-        result["errors"].append(f"Bybit tickers: {str(e)[:80]}")
 
-    try:
+        # Funding Rate
         r = requests.get(
-            f"https://api.bybit.com/v5/market/account-ratio"
-            f"?category=linear&symbol={symbol_bybit}&period=1h&limit=1",
+            f"https://www.okx.com/api/v5/public/funding-rate?instId={symbol_okx}",
             headers=HEADERS,
-            timeout=8,
+            timeout=6,
         )
         data = r.json()
-        if r.status_code == 200 and data.get("retCode") == 0 and data.get("result", {}).get("list"):
-            row = data["result"]["list"][0]
-            buy = safe_float(row.get("buyRatio"))
-            sell = safe_float(row.get("sellRatio"))
-            if buy is not None and sell is not None and (buy + sell) > 0:
-                total = buy + sell
-                result["long_pct"] = round(buy / total * 100, 1)
-                result["short_pct"] = round(sell / total * 100, 1)
-                result["source"] = "Bybit"
-        else:
-            result["errors"].append(f"Bybit L/S: {data.get('retMsg', r.status_code)}")
+        if data.get("code") == "0" and data.get("data"):
+            fr = safe_float(data["data"][0].get("fundingRate"))
+            if fr is not None:
+                result["funding_rate"] = fr * 100
+
     except Exception as e:
-        result["errors"].append(f"Bybit L/S: {str(e)[:80]}")
+        result["errors"].append(str(e)[:100])
+        result["source"] = "OKX (partial failure)"
 
-    # ---------- 2) Binance fallback ----------
-    if result["long_pct"] is None:
-        try:
-            r = requests.get(
-                f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio"
-                f"?symbol={symbol_binance}&period=5m&limit=1",
-                headers=HEADERS,
-                timeout=8,
-            )
-            if r.status_code == 200:
-                data = r.json()
-                if isinstance(data, list) and len(data) > 0:
-                    row = data[0]
-                    long_acc = safe_float(row.get("longAccount"))
-                    short_acc = safe_float(row.get("shortAccount"))
-                    if long_acc is not None and short_acc is not None:
-                        result["long_pct"] = round(long_acc * 100, 1)
-                        result["short_pct"] = round(short_acc * 100, 1)
-                        result["source"] = (result["source"] + " + Binance L/S") if result["source"] != "None" else "Binance"
-            else:
-                result["errors"].append(f"Binance L/S status: {r.status_code}")
-        except Exception as e:
-            result["errors"].append(f"Binance L/S: {str(e)[:80]}")
-
-    if result["oi"] is None:
-        try:
-            r = requests.get(
-                f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol_binance}",
-                headers=HEADERS,
-                timeout=6,
-            )
-            if r.status_code == 200:
-                data = r.json()
-                oi = safe_float(data.get("openInterest"))
-                if oi:
-                    result["oi"] = oi
-                    if result["source"] == "None":
-                        result["source"] = "Binance"
-        except Exception as e:
-            result["errors"].append(f"Binance OI: {str(e)[:60]}")
-
-    # ---------- 3) OKX fallback ----------
-    if result["long_pct"] is None or result["oi"] is None or result["funding_rate"] is None:
-        try:
-            if result["long_pct"] is None:
-                r = requests.get(
-                    f"https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio"
-                    f"?ccy={ccy}&period=1H",
-                    headers=HEADERS,
-                    timeout=8,
-                )
-                data = r.json()
-                if data.get("code") == "0" and data.get("data"):
-                    latest = data["data"][-1]
-                    ratio = safe_float(latest[1])
-                    if ratio and ratio > 0:
-                        long_pct = (ratio / (1 + ratio)) * 100
-                        short_pct = 100 - long_pct
-                        result["long_pct"] = round(long_pct, 1)
-                        result["short_pct"] = round(short_pct, 1)
-                        result["source"] = (result["source"] + " + OKX L/S") if result["source"] != "None" else "OKX"
-
-            if result["oi"] is None:
-                r = requests.get(
-                    f"https://www.okx.com/api/v5/public/open-interest?instType=SWAP&instId={symbol_okx}",
-                    headers=HEADERS,
-                    timeout=6,
-                )
-                data = r.json()
-                if data.get("code") == "0" and data.get("data"):
-                    oi = safe_float(data["data"][0].get("oiCcy") or data["data"][0].get("oi"))
-                    if oi:
-                        result["oi"] = oi
-                        if result["source"] == "None":
-                            result["source"] = "OKX"
-
-            if result["funding_rate"] is None:
-                r = requests.get(
-                    f"https://www.okx.com/api/v5/public/funding-rate?instId={symbol_okx}",
-                    headers=HEADERS,
-                    timeout=6,
-                )
-                data = r.json()
-                if data.get("code") == "0" and data.get("data"):
-                    fr = safe_float(data["data"][0].get("fundingRate"))
-                    if fr is not None:
-                        result["funding_rate"] = fr * 100
-                        if result["source"] == "None":
-                            result["source"] = "OKX"
-        except Exception as e:
-            result["errors"].append(f"OKX: {str(e)[:80]}")
-
-    # ---------- Final fallback ----------
+    # Safety fallback
     if result["long_pct"] is None:
         result["long_pct"] = 50.0
         result["short_pct"] = 50.0
-        result["source"] = (result["source"] if result["source"] != "None" else "N/A") + " (L/S 50/50 fallback)"
-
-    if result["source"] == "None":
-        result["source"] = "All sources failed"
+        result["source"] += " (L/S fallback)"
 
     return result
 
@@ -873,9 +774,6 @@ with tab_crypto:
                 funding = fut["funding_rate"]
                 source_label = fut["source"]
 
-                if fut.get("errors"):
-                    source_label += f" | errs: {len(fut['errors'])}"
-
                 liquidity_profiles[t] = {
                     "price": c_px,
                     "100x_l": c_px * 0.99, "50x_l": c_px * 0.98, "25x_l": c_px * 0.96,
@@ -992,18 +890,9 @@ with tab_crypto:
                 st.plotly_chart(fig_map, use_container_width=True)
 
             st.subheader("📊 Real-Time Futures Metrics")
-            st.caption("Long/Short Account Ratio • Open Interest • Funding Rate Matrix")
+            st.caption("Long/Short Account Ratio • Open Interest • Funding Rate  —  Source: OKX")
             if futures_table_rows:
                 st.dataframe(pd.DataFrame(futures_table_rows).set_index("Ticker"), use_container_width=True)
-
-            # Debug expander so you can see exactly what each source returned
-            with st.expander("🔧 Debug Futures Sources (click to expand)"):
-                for t in list(data.keys())[:6]:
-                    dbg = get_futures_metrics(t)
-                    st.write(f"**{t}** → Source: `{dbg['source']}`")
-                    st.write(f"Long: {dbg['long_pct']}% | Short: {dbg['short_pct']}% | OI: {dbg['oi']} | Funding: {dbg['funding_rate']}")
-                    if dbg.get("errors"):
-                        st.warning("Errors: " + " | ".join(dbg["errors"]))
 
             st.subheader("📊 Long vs Short Allocation")
             if liquidity_profiles:
