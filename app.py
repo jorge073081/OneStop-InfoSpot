@@ -10,6 +10,8 @@ from plotly.subplots import make_subplots
 from streamlit_autorefresh import st_autorefresh
 import feedparser
 import io
+import time
+import uuid
 from typing import Dict, List, Optional, Tuple, Any
 
 # ============================================================
@@ -34,7 +36,6 @@ st.markdown(
         .stDataFrame, table, th, td {
             font-family: 'Playfair Display', serif !important;
         }
-
         span[data-testid="stIconVisibility"], 
         button div[data-testid="stMarkdownContainer"] p,
         [class*="st-emotion-cache"] svg,
@@ -45,16 +46,13 @@ st.markdown(
         [data-testid="collapsedControlSidebar"] button {
             font-family: "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
         }
-
         .stApp { background-color: #0e1117; color: #fafafa; }
         section[data-testid="stSidebar"] { background-color: #1a1d24; }
         h1, h2, h3, h4, h5, h6, p, label, .stMarkdown { color: #fafafa !important; }
         [data-testid="stMetricValue"] { color: #00FF7F !important; }
-
         .block-container {
             padding-top: 1.2rem !important;
         }
-
         .silver-title {
             font-family: 'Playfair Display', serif !important;
             font-size: 3.8rem;
@@ -76,7 +74,6 @@ st.markdown(
             filter: drop-shadow(0 0 6px rgba(192, 192, 192, 0.7))
                     drop-shadow(0 0 12px rgba(255, 255, 255, 0.3));
         }
-
         .silver-subtitle {
             font-family: 'Playfair Display', serif !important;
             font-size: 2.1rem;
@@ -98,7 +95,6 @@ st.markdown(
             filter: drop-shadow(0 0 4px rgba(192, 192, 192, 0.6))
                     drop-shadow(0 0 8px rgba(255, 255, 255, 0.25));
         }
-
         .news-box {
             display: flex;
             flex-direction: column;
@@ -112,7 +108,6 @@ st.markdown(
             color: #a0a0a0;
             margin: 0;
         }
-
         .news-summary {
             font-size: 1.05rem;
             color: #fafafa;
@@ -158,8 +153,13 @@ RESOLUTION_MAP = {
     "6hr": {"interval": "1h", "lookback": 84, "period": "60d", "is_6h": True},
     "Daily (1d)": {"interval": "1d", "lookback": 90, "period": "2y", "is_6h": False},
     "Weekly (1w)": {"interval": "1wk", "lookback": 52, "period": "2y", "is_6h": False},
+    # --- 15-YEAR HISTORICAL OPTIONS ---
+    "Daily (5y)": {"interval": "1d", "lookback": 1260, "period": "5y", "is_6h": False},
+    "Daily (10y)": {"interval": "1d", "lookback": 2520, "period": "10y", "is_6h": False},
+    "Daily (15y)": {"interval": "1d", "lookback": 3800, "period": "15y", "is_6h": False},
+    "Weekly (15y)": {"interval": "1wk", "lookback": 780, "period": "15y", "is_6h": False},
+    "Monthly (15y)": {"interval": "1mo", "lookback": 180, "period": "15y", "is_6h": False},
 }
-
 
 def safe_float(value, default=None) -> Optional[float]:
     try:
@@ -168,7 +168,6 @@ def safe_float(value, default=None) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return default
-
 
 def normalize_columns(df: pd.DataFrame, target_ticker: Optional[str] = None) -> pd.DataFrame:
     if df is None or df.empty:
@@ -192,6 +191,37 @@ def normalize_columns(df: pd.DataFrame, target_ticker: Optional[str] = None) -> 
         df.index = df.index.tz_localize(None)
     return df
 
+# ============================================================
+# 2b. ACTIVE USERS TRACKER
+# ============================================================
+@st.cache_resource
+def get_active_users_store() -> Dict[str, float]:
+    """Shared in-memory store: session_id → last_seen timestamp"""
+    return {}
+
+def get_active_user_count(timeout_seconds: int = 90) -> int:
+    """
+    Returns approximate number of currently active users.
+    Works well on single-process deployments (local, many VPS, Streamlit Cloud single replica).
+    """
+    store = get_active_users_store()
+    
+    # Assign a stable session id
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())
+    
+    session_id = st.session_state.session_id
+    now = time.time()
+    
+    # Heartbeat
+    store[session_id] = now
+    
+    # Clean up stale sessions
+    stale = [sid for sid, last in store.items() if now - last > timeout_seconds]
+    for sid in stale:
+        del store[sid]
+    
+    return len(store)
 
 # ============================================================
 # 3. ADVANCED TECHNICAL INDICATORS ALGORITHMS
@@ -205,7 +235,6 @@ def compute_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
-
 def compute_macd(
     series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9
 ) -> Tuple[pd.Series, pd.Series, pd.Series]:
@@ -216,7 +245,6 @@ def compute_macd(
     histogram = macd_line - signal_line
     return macd_line, signal_line, histogram
 
-
 def compute_bollinger(
     series: pd.Series, window: int = 20, num_std: float = 2.0
 ) -> Tuple[pd.Series, pd.Series, pd.Series]:
@@ -225,7 +253,6 @@ def compute_bollinger(
     upper = sma + (std * num_std)
     lower = sma - (std * num_std)
     return sma, upper, lower
-
 
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty or "close" not in df.columns:
@@ -237,7 +264,6 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["macd"], df["macd_signal"], df["macd_hist"] = compute_macd(df["close"])
     df["bb_mid"], df["bb_upper"], df["bb_lower"] = compute_bollinger(df["close"])
     return df
-
 
 # ============================================================
 # 4. DATA EXTRACTION CORES
@@ -257,7 +283,6 @@ def load_ticker_data(
             if hist.empty:
                 continue
             hist = normalize_columns(hist, target_ticker=t)
-
             if is_6h:
                 hist = (
                     hist.resample("6h")
@@ -270,7 +295,6 @@ def load_ticker_data(
                     })
                     .dropna()
                 )
-
             hist = add_indicators(hist)
             display = hist.iloc[-lookback:] if len(hist) >= lookback else hist
             results[t] = display
@@ -278,18 +302,16 @@ def load_ticker_data(
             st.warning(f"Could not load {t}: {e}")
     return results
 
-
-@st.cache_data(ttl=300)
-def get_long_term_avg(ticker: str) -> Optional[float]:
+@st.cache_data(ttl=3600)
+def get_long_term_avg(ticker: str, years: int = 15) -> Optional[float]:
     try:
-        hist = yf.Ticker(ticker).history(period="1y", interval="1d", auto_adjust=True)
+        hist = yf.Ticker(ticker).history(period=f"{years}y", interval="1d", auto_adjust=True)
         hist = normalize_columns(hist, target_ticker=ticker)
         if hist.empty or "close" not in hist.columns:
             return None
         return float(hist["close"].mean())
     except Exception:
         return None
-
 
 @st.cache_data(ttl=300)
 def get_daily_pivots(tickers: Tuple[str, ...]) -> Dict[str, Dict[str, float]]:
@@ -314,7 +336,6 @@ def get_daily_pivots(tickers: Tuple[str, ...]) -> Dict[str, Dict[str, float]]:
             continue
     return pivots
 
-
 @st.cache_data(ttl=300)
 def get_fear_greed() -> Tuple[str, str]:
     try:
@@ -326,7 +347,6 @@ def get_fear_greed() -> Tuple[str, str]:
     except Exception:
         return "N/A", "Unavailable"
 
-
 @st.cache_data(ttl=90, show_spinner="Fetching fresh crypto news...")
 def get_crypto_news(cache_buster: str, max_items: int = 12) -> List[Dict]:
     feeds = {
@@ -336,17 +356,13 @@ def get_crypto_news(cache_buster: str, max_items: int = 12) -> List[Dict]:
         "The Block": "https://www.theblock.co/rss.xml",
         "CryptoSlate": "https://cryptoslate.com/feed/",
     }
-
     articles = []
-
     for source, url in feeds.items():
         try:
             resp = requests.get(url, headers=HEADERS, timeout=12)
             if resp.status_code != 200:
                 continue
-
             feed = feedparser.parse(io.BytesIO(resp.content))
-
             for entry in feed.entries[:6]:
                 published_struct = entry.get("published_parsed") or entry.get("updated_parsed")
                 if published_struct:
@@ -360,7 +376,6 @@ def get_crypto_news(cache_buster: str, max_items: int = 12) -> List[Dict]:
                         pub_dt = pd.to_datetime(raw, utc=True)
                     except Exception:
                         pub_dt = pd.Timestamp.utcnow()
-
                 summary = entry.get("summary", "") or entry.get("description", "")
                 if summary:
                     summary = (
@@ -370,7 +385,6 @@ def get_crypto_news(cache_buster: str, max_items: int = 12) -> List[Dict]:
                         .replace("<br/>", " ")
                     )
                     summary = summary[:280] + ("..." if len(summary) > 280 else "")
-
                 articles.append({
                     "title": entry.get("title", "No title").strip(),
                     "link": entry.get("link", "#"),
@@ -381,15 +395,12 @@ def get_crypto_news(cache_buster: str, max_items: int = 12) -> List[Dict]:
                 })
         except Exception:
             continue
-
     articles = sorted(articles, key=lambda x: x["published_dt"], reverse=True)
     return articles[:max_items]
-
 
 @st.cache_data(ttl=90)
 def get_real_onchain(ticker: str) -> Dict[str, Any]:
     t = ticker.upper().replace("-USD", "").replace("USDT", "").replace("USD", "").strip()
-
     if t in ["BTC", "BITCOIN"]:
         try:
             stats = requests.get("https://api.blockchain.info/stats", headers=HEADERS, timeout=10).json()
@@ -413,7 +424,6 @@ def get_real_onchain(ticker: str) -> Dict[str, Any]:
             }
         except Exception as e:
             return {"Error": f"BTC failed: {str(e)[:100]}"}
-
     try:
         r = requests.get("https://api.llama.fi/v2/chains", headers=HEADERS, timeout=12)
         chains = r.json()
@@ -440,14 +450,12 @@ def get_real_onchain(ticker: str) -> Dict[str, Any]:
         pass
     return {"Note": f"No free on-chain data found for {t}", "Source": "Free endpoints only"}
 
-
 @st.cache_data(ttl=60)
 def get_futures_metrics(ticker: str, current_price: float = 0.0) -> Dict[str, Any]:
     """OKX-only futures metrics (Bybit/Binance are geo-blocked on this host)."""
     t = ticker.upper().replace("-USD", "").replace("USDT", "").replace("USD", "").strip()
     symbol_okx = f"{t}-USDT-SWAP"
     ccy = t
-
     result = {
         "source": "OKX",
         "long_pct": None,
@@ -456,7 +464,6 @@ def get_futures_metrics(ticker: str, current_price: float = 0.0) -> Dict[str, An
         "funding_rate": None,
         "errors": [],
     }
-
     try:
         # Long / Short Account Ratio
         r = requests.get(
@@ -473,7 +480,6 @@ def get_futures_metrics(ticker: str, current_price: float = 0.0) -> Dict[str, An
                 long_pct = (ratio / (1 + ratio)) * 100
                 result["long_pct"] = round(long_pct, 1)
                 result["short_pct"] = round(100 - long_pct, 1)
-
         # Open Interest
         r = requests.get(
             f"https://www.okx.com/api/v5/public/open-interest?instType=SWAP&instId={symbol_okx}",
@@ -485,7 +491,6 @@ def get_futures_metrics(ticker: str, current_price: float = 0.0) -> Dict[str, An
             oi = safe_float(data["data"][0].get("oiCcy") or data["data"][0].get("oi"))
             if oi:
                 result["oi"] = oi
-
         # Funding Rate
         r = requests.get(
             f"https://www.okx.com/api/v5/public/funding-rate?instId={symbol_okx}",
@@ -497,19 +502,15 @@ def get_futures_metrics(ticker: str, current_price: float = 0.0) -> Dict[str, An
             fr = safe_float(data["data"][0].get("fundingRate"))
             if fr is not None:
                 result["funding_rate"] = fr * 100
-
     except Exception as e:
         result["errors"].append(str(e)[:100])
         result["source"] = "OKX (partial failure)"
-
     # Safety fallback
     if result["long_pct"] is None:
         result["long_pct"] = 50.0
         result["short_pct"] = 50.0
         result["source"] += " (L/S fallback)"
-
     return result
-
 
 @st.cache_data(ttl=300, show_spinner="Gathering cross-asset macro indicators...")
 def load_macro_data() -> Dict[str, pd.DataFrame]:
@@ -530,9 +531,7 @@ def load_macro_data() -> Dict[str, pd.DataFrame]:
         except Exception:
             continue
     return macro_results
-
-
-# ============================================================
+    # ============================================================
 # 5. CHART BUILDING ENGINE
 # ============================================================
 def build_asset_chart(
@@ -550,7 +549,6 @@ def build_asset_chart(
     show_vs_btc: bool,
     btc_data: Optional[pd.DataFrame] = None,
 ) -> go.Figure:
-
     h_data = h_data.copy()
     if show_baseline:
         h_data["baseline"] = h_data["close"].mean()
@@ -562,28 +560,23 @@ def build_asset_chart(
             asset_norm = h_data.loc[common_idx, "close"] / h_data.loc[common_idx, "close"].iloc[0]
             btc_norm = btc_data.loc[common_idx, "close"] / btc_data.loc[common_idx, "close"].iloc[0]
             h_data.loc[common_idx, "vs_btc"] = (asset_norm / btc_norm - 1) * 100
-
     rows = 1
     if show_rsi: rows += 1
     if show_macd: rows += 1
     if show_vol_profile: rows += 1
     if show_vs_btc and "vs_btc" in h_data.columns: rows += 1
-
     row_heights = [0.50] + [0.125] * (rows - 1) if rows > 1 else [1.0]
     subplot_titles = ["Price"]
     if show_rsi: subplot_titles.append("RSI (14)")
     if show_macd: subplot_titles.append("MACD")
     if show_vol_profile: subplot_titles.append("Volume Profile")
     if show_vs_btc and "vs_btc" in h_data.columns: subplot_titles.append("vs BTC (%)")
-
     fig = make_subplots(
         rows=rows, cols=1, shared_xaxes=True,
         vertical_spacing=0.02, row_heights=row_heights,
         subplot_titles=subplot_titles,
     )
-
     current_row = 1
-
     has_ohlc = all(col in h_data.columns for col in ["open", "high", "low", "close"])
     if show_candles and has_ohlc:
         fig.add_trace(
@@ -608,7 +601,6 @@ def build_asset_chart(
             ),
             row=current_row, col=1,
         )
-
     if show_bb and "bb_upper" in h_data.columns:
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["bb_upper"], name="BB Upper",
                                  line=dict(color="rgba(255,255,255,0.3)", width=1), showlegend=False), row=current_row, col=1)
@@ -617,7 +609,6 @@ def build_asset_chart(
                                  fill="tonexty", fillcolor="rgba(0,255,127,0.08)"), row=current_row, col=1)
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["bb_mid"], name="BB Mid",
                                  line=dict(color="rgba(255,255,255,0.5)", width=1, dash="dot")), row=current_row, col=1)
-
     if show_sma50 and "sma50" in h_data.columns:
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["sma50"], name="SMA 50",
                                  line=dict(color="#00FF7F", width=1.5, dash="dash")), row=current_row, col=1)
@@ -630,7 +621,6 @@ def build_asset_chart(
     if show_vwap and "vwap" in h_data.columns:
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["vwap"], name="VWAP",
                                  line=dict(color="#FF00FF", width=1.6)), row=current_row, col=1)
-
     if show_rsi and "rsi" in h_data.columns:
         current_row += 1
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["rsi"], name="RSI",
@@ -639,7 +629,6 @@ def build_asset_chart(
         fig.add_hline(y=30, line_dash="dash", line_color="lime", row=current_row, col=1)
         fig.add_hline(y=50, line_dash="dot", line_color="gray", row=current_row, col=1)
         fig.update_yaxes(range=[0, 100], row=current_row, col=1)
-
     if show_macd and "macd_hist" in h_data.columns:
         current_row += 1
         colors = ["#00FF7F" if v >= 0 else "#FF4500" for v in h_data["macd_hist"]]
@@ -649,7 +638,6 @@ def build_asset_chart(
                                  line=dict(color="#00BFFF", width=1.5)), row=current_row, col=1)
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["macd_signal"], name="Signal",
                                  line=dict(color="#FF69B4", width=1.5)), row=current_row, col=1)
-
     if show_vol_profile and "volume" in h_data.columns:
         current_row += 1
         try:
@@ -661,13 +649,11 @@ def build_asset_chart(
                           row=current_row, col=1)
         except Exception:
             pass
-
     if show_vs_btc and "vs_btc" in h_data.columns:
         current_row += 1
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["vs_btc"], name="vs BTC %",
                                  line=dict(color="#00FFAA", width=1.8)), row=current_row, col=1)
         fig.add_hline(y=0, line_dash="dash", line_color="gray", row=current_row, col=1)
-
     fig.update_layout(
         height=220 + (rows * 150),
         template="plotly_dark",
@@ -680,9 +666,7 @@ def build_asset_chart(
     )
     for i in range(1, rows + 1):
         fig.update_xaxes(rangeslider_visible=False, row=i, col=1)
-
     return fig
-
 
 # ============================================================
 # 6. SIDEBAR CONTROLS
@@ -690,10 +674,8 @@ def build_asset_chart(
 st.sidebar.header("Controls")
 t_raw = st.sidebar.text_input("Enter Tickers (commas):", value="BTC-USD, ETH-USD, SOL-USD, XRP-USD")
 tkrs = [t.strip().upper() for t in t_raw.split(",") if t.strip()]
-
 res_disp = st.sidebar.selectbox("Resolution", list(RESOLUTION_MAP.keys()))
 rf_rate = st.sidebar.slider("Refresh Rate (Seconds)", 15, 120, 45)
-
 st.sidebar.subheader("Chart Type & Indicators")
 show_candles = st.sidebar.checkbox("Candlestick Chart", value=True)
 show_sma50 = st.sidebar.checkbox("50 SMA", value=True)
@@ -702,29 +684,33 @@ show_bb = st.sidebar.checkbox("Bollinger Bands (20,2)", value=True)
 show_rsi = st.sidebar.checkbox("RSI (14)", value=True)
 show_macd = st.sidebar.checkbox("MACD (12,26,9)", value=True)
 show_vol_profile = st.sidebar.checkbox("Volume Profile", value=True)
-
 st.sidebar.subheader("Overlays & On-chain")
 show_baseline = st.sidebar.checkbox("Historical Baseline (Period Avg)", value=True)
 show_long_baseline = st.sidebar.checkbox("Long-term Baseline (1Y Avg)", value=False)
 show_vwap = st.sidebar.checkbox("VWAP", value=False)
 show_vs_btc = st.sidebar.checkbox("Relative Strength vs BTC", value=False)
 show_onchain = st.sidebar.checkbox("Show On-chain Metrics", value=True)
-
 res_cfg = RESOLUTION_MAP[res_disp]
 interval = res_cfg["interval"]
 lookback_bars = res_cfg["lookback"]
 period = res_cfg["period"]
 is_6h = res_cfg["is_6h"]
-
 st_autorefresh(interval=rf_rate * 1000, key="datarefresh")
 
 # ============================================================
 # 7. MAIN LAYOUT
 # ============================================================
-st.markdown('<div class="silver-title">OneStop-InfoSpot</div>', unsafe_allow_html=True)
-st.markdown('<div class="silver-subtitle">Asset Intelligence Terminal</div>', unsafe_allow_html=True)
+# Active users + Title
+active_users = get_active_user_count(timeout_seconds=90)
 
-st.caption("Dark mode • Candlesticks • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro")
+col_title, col_users = st.columns([5.5, 1])
+with col_title:
+    st.markdown('<div class="silver-title">OneStop-InfoSpot</div>', unsafe_allow_html=True)
+    st.markdown('<div class="silver-subtitle">Asset Intelligence Terminal</div>', unsafe_allow_html=True)
+with col_users:
+    st.metric("🟢 Active Users", active_users)
+
+st.caption("Dark mode • Candlesticks • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro • 15Y Historical")
 
 tab_crypto, tab_macro = st.tabs(["⚡ Crypto Intelligence Terminal", "🌐 Global Macro Insights"])
 
@@ -733,12 +719,10 @@ with tab_crypto:
         st.info("Enter at least one ticker in the sidebar.")
     else:
         data = load_ticker_data(tuple(tkrs), interval, lookback_bars, period, is_6h)
-
         if not data:
             st.error("No valid data loaded. Check tickers or try a different resolution.")
         else:
             daily_pivots = get_daily_pivots(tuple(tkrs))
-
             btc_data = None
             if show_vs_btc:
                 if "BTC-USD" in data:
@@ -749,31 +733,25 @@ with tab_crypto:
                         btc_data = btc_raw.get("BTC-USD")
                     except Exception:
                         pass
-
             combined_df = pd.DataFrame()
             matrix_rows = []
             liquidity_profiles = {}
             onchain_profiles = {}
             futures_table_rows = []
-
             for t, hist in data.items():
                 if hist.empty or "close" not in hist.columns:
                     continue
-
                 s_px = float(hist["close"].iloc[0])
                 combined_df[t] = ((hist["close"] / s_px) - 1) * 100
-
                 c_px = float(hist["close"].iloc[-1])
                 p_px = float(hist["close"].iloc[-2]) if len(hist) > 1 else c_px
                 delta = ((c_px - p_px) / p_px) * 100
-
                 fut = get_futures_metrics(t, current_price=c_px)
                 long_r = fut["long_pct"] if fut["long_pct"] is not None else 50.0
                 short_r = fut["short_pct"] if fut["short_pct"] is not None else 50.0
                 oi_val = fut["oi"]
                 funding = fut["funding_rate"]
                 source_label = fut["source"]
-
                 liquidity_profiles[t] = {
                     "price": c_px,
                     "100x_l": c_px * 0.99, "50x_l": c_px * 0.98, "25x_l": c_px * 0.96,
@@ -781,7 +759,6 @@ with tab_crypto:
                     "longs": long_r, "shorts": short_r,
                     "oi": oi_val, "funding": funding, "source": source_label,
                 }
-
                 futures_table_rows.append({
                     "Ticker": t,
                     "Long %": f"{long_r:.1f}%",
@@ -790,10 +767,8 @@ with tab_crypto:
                     "Funding Rate": f"{funding:+.4f}%" if funding is not None else "N/A",
                     "Source": source_label,
                 })
-
                 if show_onchain and ("-USD" in t or t.replace("-", "").isalpha()):
                     onchain_profiles[t] = get_real_onchain(t)
-
                 if t in daily_pivots:
                     p = daily_pivots[t]
                     matrix_rows.append({
@@ -808,7 +783,6 @@ with tab_crypto:
                         "Long %": f"{long_r:.1f}%", "Short %": f"{short_r:.1f}%",
                         "Pivot": "N/A", "S1": "N/A", "S2": "N/A", "R1": "N/A", "R2": "N/A",
                     })
-
             st.subheader("📊 Comparative Relative Performance")
             if not combined_df.empty:
                 fig = go.Figure()
@@ -819,18 +793,14 @@ with tab_crypto:
                                   margin=dict(l=10, r=10, t=30, b=10),
                                   font=dict(family="Playfair Display, serif"))
                 st.plotly_chart(fig, use_container_width=True)
-
             st.subheader("🔥 Asset Analysis Frameworks")
             m_tgt = st.selectbox("Select Target Asset:", list(liquidity_profiles.keys()))
-
             if m_tgt and m_tgt in data:
                 h_data = data[m_tgt].copy()
-
                 if show_long_baseline:
                     long_avg = get_long_term_avg(m_tgt)
                     if long_avg is not None:
                         h_data["long_baseline"] = long_avg
-
                 fig = build_asset_chart(
                     h_data=h_data,
                     show_candles=show_candles,
@@ -846,16 +816,13 @@ with tab_crypto:
                     show_vs_btc=show_vs_btc,
                     btc_data=btc_data,
                 )
-
                 if show_long_baseline and "long_baseline" in h_data.columns:
                     fig.add_trace(
                         go.Scatter(x=h_data.index, y=h_data["long_baseline"], name="1Y Baseline",
                                    line=dict(color="#FF8C00", width=1.8, dash="dashdot")),
                         row=1, col=1,
                     )
-
                 st.plotly_chart(fig, use_container_width=True)
-
                 cols = st.columns(5)
                 if show_rsi and "rsi" in h_data.columns and not h_data["rsi"].isna().all():
                     rsi_val = h_data["rsi"].iloc[-1]
@@ -874,11 +841,9 @@ with tab_crypto:
                     cols[3].metric("vs Baseline", f"{dist:+.1f}%")
                 if show_vs_btc and "vs_btc" in h_data.columns:
                     cols[4].metric("vs BTC", f"{h_data['vs_btc'].iloc[-1]:+.1f}%")
-
                 st.markdown("#### 🔥 Liquidity Map (Estimated Liquidation Levels)")
                 p = liquidity_profiles[m_tgt]
                 st.caption(f"Source: **{p['source']}** | Order book distribution values are calculated continuously")
-
                 levels = [p["25x_l"], p["50x_l"], p["100x_l"], p["price"], p["100x_s"], p["50x_s"], p["25x_s"]]
                 labels = ["25x Long Liq", "50x Long Liq", "100x Long Liq", "Current Price",
                           "100x Short Liq", "50x Short Liq", "25x Short Liq"]
@@ -888,12 +853,10 @@ with tab_crypto:
                                       paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
                                       font=dict(family="Playfair Display, serif"))
                 st.plotly_chart(fig_map, use_container_width=True)
-
             st.subheader("📊 Real-Time Futures Metrics")
             st.caption("Long/Short Account Ratio • Open Interest • Funding Rate  —  Source: OKX")
             if futures_table_rows:
                 st.dataframe(pd.DataFrame(futures_table_rows).set_index("Ticker"), use_container_width=True)
-
             st.subheader("📊 Long vs Short Allocation")
             if liquidity_profiles:
                 c_as = list(liquidity_profiles.keys())
@@ -908,22 +871,18 @@ with tab_crypto:
                                     paper_bgcolor="#0e1117", plot_bgcolor="#0e1117", yaxis_title="%",
                                     font=dict(family="Playfair Display, serif"))
                 st.plotly_chart(fig_c, use_container_width=True)
-
             if show_onchain and onchain_profiles:
                 st.subheader("🔗 Real On-chain Metrics")
                 for ticker, metrics in onchain_profiles.items():
                     st.markdown(f"**{ticker}**")
                     st.dataframe(pd.DataFrame(list(metrics.items()), columns=["Metric", "Value"]),
                                  use_container_width=True, hide_index=True)
-
             if matrix_rows:
                 st.subheader("🧮 Side-by-Side Pivot Matrix (Daily Pivots)")
                 st.caption("Classic Floor Pivots calculated from the previous daily candle close parameters")
                 st.dataframe(pd.DataFrame(matrix_rows).set_index("Ticker"), use_container_width=True)
-
             st.markdown("---")
             col1, col2 = st.columns(2)
-
             with col1:
                 st.subheader("📰 Live Crypto News")
                 pulse_key = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -952,7 +911,6 @@ with tab_crypto:
                             st.markdown(html_body, unsafe_allow_html=True)
                 else:
                     st.info("No news articles available right now. Try refreshing.")
-
             with col2:
                 st.subheader("📊 Sentiment")
                 fng_v, fng_c = get_fear_greed()
@@ -982,7 +940,6 @@ with tab_macro:
                 else:
                     col_target.metric(name, f"${current_p:,.2f}", f"{pct_delta:+.2f}%")
                 m_index += 1
-
         st.markdown("#### 📉 90-Day Normalized Comparative Performance Matrix")
         st.caption("All indices normalized to zero base from original baseline inception interval to pinpoint risk-on/risk-off decoupling triggers.")
         
