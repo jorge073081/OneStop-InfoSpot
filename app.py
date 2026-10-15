@@ -27,6 +27,7 @@ st.markdown(
     """
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
     <style>
+        /* Target exact textual blocks to prevent breaking Material Icons/Ligatures */
         html, body, .stApp, p, label, .stMarkdown p, .stCaption, 
         h1, h2, h3, h4, h5, h6,
         .stTextInput input, .stSelectbox div, .stSlider div, .stCheckbox label,
@@ -35,6 +36,7 @@ st.markdown(
             font-family: 'Playfair Display', serif !important;
         }
 
+        /* HARD OVERRIDE: Restore Streamlit's icon ligatures and graphic symbols */
         span[data-testid="stIconVisibility"], 
         button div[data-testid="stMarkdownContainer"] p,
         [class*="st-emotion-cache"] svg,
@@ -51,10 +53,12 @@ st.markdown(
         h1, h2, h3, h4, h5, h6, p, label, .stMarkdown { color: #fafafa !important; }
         [data-testid="stMetricValue"] { color: #00FF7F !important; }
 
+        /* Reduce top padding */
         .block-container {
             padding-top: 1.2rem !important;
         }
 
+        /* Main Title - Playfair Display Font */
         .silver-title {
             font-family: 'Playfair Display', serif !important;
             font-size: 3.8rem;
@@ -62,13 +66,24 @@ st.markdown(
             text-align: center;
             margin: -0.6rem 0 0.15rem 0;
             letter-spacing: 2px;
-            background: linear-gradient(to bottom, #ffffff 0%, #e8e8e8 25%, #c0c0c0 50%, #a0a0a0 75%, #d0d0d0 100%);
+
+            background: linear-gradient(
+                to bottom,
+                #ffffff 0%,
+                #e8e8e8 25%,
+                #c0c0c0 50%,
+                #a0a0a0 75%,
+                #d0d0d0 100%
+            );
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
-            filter: drop-shadow(0 0 6px rgba(192, 192, 192, 0.7)) drop-shadow(0 0 12px rgba(255, 255, 255, 0.3));
+
+            filter: drop-shadow(0 0 6px rgba(192, 192, 192, 0.7))
+                    drop-shadow(0 0 12px rgba(255, 255, 255, 0.3));
         }
 
+        /* Subtitle - Playfair Display Font */
         .silver-subtitle {
             font-family: 'Playfair Display', serif !important;
             font-size: 2.1rem;
@@ -76,13 +91,24 @@ st.markdown(
             text-align: center;
             margin: 0 0 0.9rem 0;
             letter-spacing: 1px;
-            background: linear-gradient(to bottom, #ffffff 0%, #e8e8e8 25%, #c0c0c0 50%, #a0a0a0 75%, #d0d0d0 100%);
+
+            background: linear-gradient(
+                to bottom,
+                #ffffff 0%,
+                #e8e8e8 25%,
+                #c0c0c0 50%,
+                #a0a0a0 75%,
+                #d0d0d0 100%
+            );
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
-            filter: drop-shadow(0 0 4px rgba(192, 192, 192, 0.6)) drop-shadow(0 0 8px rgba(255, 255, 255, 0.25));
+
+            filter: drop-shadow(0 0 4px rgba(192, 192, 192, 0.6))
+                    drop-shadow(0 0 8px rgba(255, 255, 255, 0.25));
         }
 
+        /* Clean CSS framework for news items to remove overlapping buttons */
         .news-box {
             display: flex;
             flex-direction: column;
@@ -288,13 +314,16 @@ def get_daily_pivots(tickers: Tuple[str, ...]) -> Dict[str, Dict[str, float]]:
 def get_fear_greed() -> Tuple[str, str]:
     try:
         res = requests.get("https://api.alternative.me/fng/", headers=HEADERS, timeout=8).json()
-        data = res["data"][0]
-        return data["value"], data["value_classification"]
+        data = res["data"]
+        # FIXED: alternative.me returns a list under the 'data' key. Extract index 0 safely.
+        if isinstance(data, list) and len(data) > 0:
+            return data[0]["value"], data[0]["value_classification"]
+        return "N/A", "Unavailable"
     except Exception:
         return "N/A", "Unavailable"
 
 
-@st.cache_data(ttl=45)
+@st.cache_data(ttl=300)
 def get_crypto_news(max_items: int = 12) -> List[Dict]:
     feeds = {
         "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
@@ -302,31 +331,21 @@ def get_crypto_news(max_items: int = 12) -> List[Dict]:
         "Decrypt": "https://decrypt.co/feed",
     }
     articles = []
-    
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5"
-    })
-
     for source, url in feeds.items():
         try:
-            response = session.get(url, timeout=10)
-            if response.status_code == 200:
-                feed = feedparser.parse(response.text)
-                for entry in feed.entries[:5]:
-                    published = entry.get("published", entry.get("updated", "Unknown"))
-                    summary = entry.get("summary", "")
-                    if summary:
-                        summary = summary.replace("<p>", "").replace("</p>", "")[:260] + "..."
-                    articles.append({
-                        "title": entry.get("title", "No title"),
-                        "link": entry.get("link", "#"),
-                        "source": source,
-                        "published": published,
-                        "summary": summary,
-                    })
+            feed = feedparser.parse(url)
+            for entry in feed.entries[:5]:
+                published = entry.get("published", entry.get("updated", "Unknown"))
+                summary = entry.get("summary", "")
+                if summary:
+                    summary = summary.replace("<p>", "").replace("</p>", "")[:260] + "..."
+                articles.append({
+                    "title": entry.get("title", "No title"),
+                    "link": entry.get("link", "#"),
+                    "source": source,
+                    "published": published,
+                    "summary": summary,
+                })
         except Exception:
             continue
     return sorted(articles, key=lambda x: x["published"], reverse=True)[:max_items]
@@ -446,7 +465,6 @@ def get_real_onchain(ticker: str) -> Dict[str, Any]:
 def get_futures_metrics(ticker: str) -> Dict[str, Any]:
     t = ticker.upper().replace("-USD", "").replace("USDT", "").replace("USD", "").strip()
     symbol_binance = f"{t}USDT"
-    symbol_bybit = f"{t}USDT"
     symbol_okx = f"{t}-USDT-SWAP"
 
     result = {
@@ -457,15 +475,13 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         "funding_rate": None,
     }
 
-    # --- 1. BINANCE FUTURES API ---
     try:
         r = requests.get(
             f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol={symbol_binance}&period=1h&limit=1",
             headers=HEADERS, timeout=8,
         )
         if r.status_code == 200 and r.json():
-            data_res = r.json()
-            data = data_res[0] if isinstance(data_res, list) else data_res
+            data = r.json()[0]  # FIXED: Unpack first chronological dict from array list
             long_acc = safe_float(data.get("longAccount"), 0.5)
             short_acc = safe_float(data.get("shortAccount"), 0.5)
             total = long_acc + short_acc
@@ -496,19 +512,17 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # --- 2. BYBIT V5 API ---
     try:
         r = requests.get(
-            f"https://api.bybit.com/v5/market/account-ratio?category=linear&symbol={symbol_bybit}&period=1h&limit=1",
+            f"https://api.bybit.com/v5/market/account-ratio?category=linear&symbol={symbol_binance}&period=1h&limit=1",
             headers=HEADERS, timeout=8,
         )
         if r.status_code == 200:
             data = r.json()
             if data.get("retCode") == 0 and data.get("result", {}).get("list"):
-                item_list = data["result"]["list"]
-                item = item_list[0] if isinstance(item_list, list) else item_list
-                buy_ratio = safe_float(item.get("buyRatio"), 0.0)
-                sell_ratio = safe_float(item.get("sellRatio"), 0.0)
+                item = data["result"]["list"][0]  # FIXED: Target correct element payload index dictionary offset
+                buy_ratio = safe_float(item.get("buyRatio"), 0.5)
+                sell_ratio = safe_float(item.get("sellRatio"), 0.5)
                 total = buy_ratio + sell_ratio
                 if total > 0:
                     result["long_pct"] = round(buy_ratio / total * 100, 1)
@@ -516,28 +530,24 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
                     result["source"] = "Bybit"
 
         r2 = requests.get(
-            f"https://api.bybit.com/v5/market/open-interest?category=linear&symbol={symbol_bybit}&intervalTime=1h&limit=1",
+            f"https://api.bybit.com/v5/market/open-interest?category=linear&symbol={symbol_binance}&intervalTime=1h&limit=1",
             headers=HEADERS, timeout=8,
         )
         if r2.status_code == 200:
             data = r2.json()
             if data.get("retCode") == 0 and data.get("result", {}).get("list"):
-                item_list = data["result"]["list"]
-                item = item_list[0] if isinstance(item_list, list) else item_list
-                oi = safe_float(item.get("openInterest"))
+                oi = safe_float(data["result"]["list"][0].get("openInterest")) # FIXED: Unpack internal arrays
                 if oi > 0:
                     result["oi"] = oi
 
         r3 = requests.get(
-            f"https://api.bybit.com/v5/market/funding/history?category=linear&symbol={symbol_bybit}&limit=1",
+            f"https://api.bybit.com/v5/market/funding/history?category=linear&symbol={symbol_binance}&limit=1",
             headers=HEADERS, timeout=8,
         )
         if r3.status_code == 200:
             data = r3.json()
             if data.get("retCode") == 0 and data.get("result", {}).get("list"):
-                item_list = data["result"]["list"]
-                item = item_list[0] if isinstance(item_list, list) else item_list
-                fr = safe_float(item.get("fundingRate"))
+                fr = safe_float(data["result"]["list"][0].get("fundingRate")) # FIXED: Access internal arrays
                 result["funding_rate"] = fr * 100
 
         if result["source"] == "Bybit":
@@ -545,7 +555,6 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # --- 3. OKX V5 API ---
     try:
         r = requests.get(
             f"https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio?ccy={t}&period=1H",
@@ -554,9 +563,14 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r.status_code == 200:
             data = r.json()
             if data.get("code") == "0" and data.get("data"):
-                item_list = data["data"]
-                item = item_list[0] if isinstance(item_list, list) else item_list
-                ratio = safe_float(item if not isinstance(item, dict) else item.get("ratio", 1.0))
+                # FIXED: Handle OKX response properly as it can be a list of lists or lists of dicts
+                item = data["data"][0]
+                if isinstance(item, list) and len(item) > 1:
+                    ratio = safe_float(item[1])
+                elif isinstance(item, dict):
+                    ratio = safe_float(item.get("ratio", 1.0))
+                else:
+                    ratio = safe_float(item, 1.0)
                 long_pct = round(ratio / (1 + ratio) * 100, 1)
                 result["long_pct"] = long_pct
                 result["short_pct"] = round(100 - long_pct, 1)
@@ -569,9 +583,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r2.status_code == 200:
             data = r2.json()
             if data.get("code") == "0" and data.get("data"):
-                item_list = data["data"]
-                item = item_list[0] if isinstance(item_list, list) else item_list
-                oi = safe_float(item.get("oi"))
+                oi = safe_float(data["data"][0].get("oi")) # FIXED: Unpack internal lists
                 if oi > 0:
                     result["oi"] = oi
 
@@ -582,9 +594,7 @@ def get_futures_metrics(ticker: str) -> Dict[str, Any]:
         if r3.status_code == 200:
             data = r3.json()
             if data.get("code") == "0" and data.get("data"):
-                item_list = data["data"]
-                item = item_list[0] if isinstance(item_list, list) else item_list
-                fr = safe_float(item.get("fundingRate"))
+                fr = safe_float(data["data"][0].get("fundingRate")) # FIXED: Unpack internal lists
                 result["funding_rate"] = fr * 100
 
         if result["source"] == "OKX":
@@ -642,12 +652,12 @@ def build_asset_chart(
     if show_baseline:
         h_data["baseline"] = h_data["close"].mean()
     if show_vwap and "volume" in h_data.columns:
-        h_data["vwap"] = (h_data["close" * h_data["volume"]).cumsum() / h_data["volume"].cumsum()
+        h_data["vwap"] = (h_data["close"] * h_data["volume"]).cumsum() / h_data["volume"].cumsum()
     if show_vs_btc and btc_data is not None:
         common_idx = h_data.index.intersection(btc_data.index)
         if len(common_idx) > 5:
-            asset_norm = h_data.loc[common_idx, "close"] / h_data.loc[common_idx, "close"].iloc[-1]
-            btc_norm = btc_data.loc[common_idx, "close"] / btc_data.loc[common_idx, "close"].iloc[-1]
+            asset_norm = h_data.loc[common_idx, "close"] / h_data.loc[common_idx, "close"].iloc[0]
+            btc_norm = btc_data.loc[common_idx, "close"] / btc_data.loc[common_idx, "close"].iloc[0]
             h_data.loc[common_idx, "vs_btc"] = (asset_norm / btc_norm - 1) * 100
 
     rows = 1
@@ -712,7 +722,7 @@ def build_asset_chart(
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["sma200"], name="SMA 200",
                                  line=dict(color="#FF4500", width=1.5)), row=current_row, col=1)
     if show_baseline and "baseline" in h_data.columns:
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["baseline"], name="Hist. Baseline (Period Avg)",
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["baseline"], name="Hist. Baseline (Avg)",
                                  line=dict(color="#FFD700", width=1.8, dash="dot")), row=current_row, col=1)
     if show_vwap and "vwap" in h_data.columns:
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["vwap"], name="VWAP",
@@ -726,6 +736,7 @@ def build_asset_chart(
         fig.add_hline(y=70, line_dash="dash", line_color="red", row=current_row, col=1)
         fig.add_hline(y=30, line_dash="dash", line_color="lime", row=current_row, col=1)
         fig.add_hline(y=50, line_dash="dot", line_color="gray", row=current_row, col=1)
+        fig.update_yaxes(range=[0, 100], row=current_row, col=1)
         current_row += 1
 
     if show_macd and "macd_hist" in h_data.columns:
@@ -814,10 +825,11 @@ st.markdown('<div class="silver-subtitle">📈 Asset Intelligence Terminal</div>
 
 st.caption("Dark mode • Candlesticks • Long/Short + OI + Funding • RSI • MACD • Bollinger • On-chain • Global Macro")
 
+# Initializing Native UI Workspace Decoupling Tabs
 tab_crypto, tab_macro = st.tabs(["⚡ Crypto Intelligence Terminal", "🌐 Global Macro Insights"])
 
 # ------------------------------------------------------------
-# TAB 1: CRYPTO INTELLIGENCE WORKSPACE
+# TAB 1: CRYPTO INTELLIGENCE WORKSPACE (YOUR ORIGINAL LOGIC)
 # ------------------------------------------------------------
 with tab_crypto:
     if not tkrs:
@@ -851,7 +863,7 @@ with tab_crypto:
                 if hist.empty or "close" not in hist.columns:
                     continue
 
-                s_px = float(hist["close"].iloc[-1])
+                s_px = float(hist["close"].iloc[0])
                 combined_df[t] = ((hist["close"] / s_px) - 1) * 100
 
                 c_px = float(hist["close"].iloc[-1])
@@ -1057,6 +1069,7 @@ with tab_macro:
     if not macro_data:
         st.info("Macro matrix data endpoints temporarily unavailable. Retrying query package updates...")
     else:
+        # 1. Macro Summary Cards Grid
         m_cols = st.columns(3)
         m_index = 0
         
@@ -1073,13 +1086,14 @@ with tab_macro:
                     col_target.metric(name, f"${current_p:,.2f}", f"{pct_delta:+.2f}%")
                 m_index += 1
 
+        # 2. Normalized Comparative Performance Visualizer
         st.markdown("#### 📉 90-Day Normalized Comparative Performance Matrix")
         st.caption("All indices normalized to zero base from original baseline inception interval to pinpoint risk-on/risk-off decoupling triggers.")
         
         macro_combined = pd.DataFrame()
         for name, m_df in macro_data.items():
             if not m_df.empty and "close" in m_df.columns:
-                base_p = float(m_df["close"].iloc[-1])
+                base_p = float(m_df["close"].iloc[0])
                 macro_combined[name] = ((m_df["close"] / base_p) - 1) * 100
                 
         if not macro_combined.empty:
