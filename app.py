@@ -50,6 +50,12 @@ st.markdown(
             padding-top: 1.2rem !important;
         }
 
+        /* Fix text overlapping inside st.expander elements due to custom typography overrides */
+        .stExpander div, .stExpander p, .stExpander span {
+            line-height: 1.6 !important;
+            margin-bottom: 0.5rem !important;
+        }
+
         /* Main Title - Playfair Display Font */
         .silver-title {
             font-family: 'Playfair Display', serif !important;
@@ -399,8 +405,8 @@ def get_real_onchain(ticker: str) -> Dict[str, Any]:
                 return {
                     "Asset": t,
                     "Price (USD)": f"${d.get('usd', 0):,.4f}",
-                    "Market Cap": f"${d.get('usd_market_cap', 0):,.0f}" if d.get('usd_market_cap') else "N/A",
-                    "24h Volume": f"${d.get('usd_24h_vol', 0):,.0f}" if d.get('usd_24h_vol') else "N/A",
+                    "Market Cap": f"${d.get('usd_market_cap', 0):,.0f}" if d.get("usd_market_cap") else "N/A",
+                    "24h Volume": f"${d.get('usd_24h_vol', 0):,.0f}" if d.get("usd_24h_vol") else "N/A",
                     "Source": "CoinGecko (keyless free)",
                 }
     except Exception as e:
