@@ -27,7 +27,6 @@ st.markdown(
     """
     <link href="https://googleapis.com" rel="stylesheet">
     <style>
-        /* Target exact textual blocks to prevent breaking Material Icons/Ligatures */
         html, body, .stApp, p, label, .stMarkdown p, .stCaption, 
         h1, h2, h3, h4, h5, h6,
         .stTextInput input, .stSelectbox div, .stSlider div, .stCheckbox label,
@@ -36,7 +35,6 @@ st.markdown(
             font-family: 'Playfair Display', serif !important;
         }
 
-        /* HARD OVERRIDE: Restore Streamlit's icon ligatures and graphic symbols */
         span[data-testid="stIconVisibility"], 
         button div[data-testid="stMarkdownContainer"] p,
         [class*="st-emotion-cache"] svg,
@@ -53,12 +51,10 @@ st.markdown(
         h1, h2, h3, h4, h5, h6, p, label, .stMarkdown { color: #fafafa !important; }
         [data-testid="stMetricValue"] { color: #00FF7F !important; }
 
-        /* Reduce top padding */
         .block-container {
             padding-top: 1.2rem !important;
         }
 
-        /* Main Title - Playfair Display Font */
         .silver-title {
             font-family: 'Playfair Display', serif !important;
             font-size: 3.8rem;
@@ -66,24 +62,13 @@ st.markdown(
             text-align: center;
             margin: -0.6rem 0 0.15rem 0;
             letter-spacing: 2px;
-
-            background: linear-gradient(
-                to bottom,
-                #ffffff 0%,
-                #e8e8e8 25%,
-                #c0c0c0 50%,
-                #a0a0a0 75%,
-                #d0d0d0 100%
-            );
+            background: linear-gradient(to bottom, #ffffff 0%, #e8e8e8 25%, #c0c0c0 50%, #a0a0a0 75%, #d0d0d0 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
-
-            filter: drop-shadow(0 0 6px rgba(192, 192, 192, 0.7))
-                    drop-shadow(0 0 12px rgba(255, 255, 255, 0.3));
+            filter: drop-shadow(0 0 6px rgba(192, 192, 192, 0.7)) drop-shadow(0 0 12px rgba(255, 255, 255, 0.3));
         }
 
-        /* Subtitle - Playfair Display Font */
         .silver-subtitle {
             font-family: 'Playfair Display', serif !important;
             font-size: 2.1rem;
@@ -91,24 +76,13 @@ st.markdown(
             text-align: center;
             margin: 0 0 0.9rem 0;
             letter-spacing: 1px;
-
-            background: linear-gradient(
-                to bottom,
-                #ffffff 0%,
-                #e8e8e8 25%,
-                #c0c0c0 50%,
-                #a0a0a0 75%,
-                #d0d0d0 100%
-            );
+            background: linear-gradient(to bottom, #ffffff 0%, #e8e8e8 25%, #c0c0c0 50%, #a0a0a0 75%, #d0d0d0 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
-
-            filter: drop-shadow(0 0 4px rgba(192, 192, 192, 0.6))
-                    drop-shadow(0 0 8px rgba(255, 255, 255, 0.25));
+            filter: drop-shadow(0 0 4px rgba(192, 192, 192, 0.6)) drop-shadow(0 0 8px rgba(255, 255, 255, 0.25));
         }
 
-        /* Clean CSS framework for news items to remove overlapping buttons */
         .news-box {
             display: flex;
             flex-direction: column;
@@ -290,25 +264,27 @@ def get_long_term_avg(ticker: str) -> Optional[float]:
 def get_daily_pivots(tickers: Tuple[str, ...]) -> Dict[str, Dict[str, float]]:
     pivots = {}
     for t in tickers:
-        try:daily = yf.Ticker(t).history(period="10d", interval="1d", auto_adjust=True)
-daily = normalize_columns(daily)
-if len(daily) < 2:
-continue
-prev = daily.iloc[-2]
-high, low, close = float(prev["high"]), float(prev["low"]), float(prev["close"])
-pivot = (high + low + close) / 3
-pivots[t] = {
-"Pivot": pivot,
-"R1": (2 * pivot) - low,
-"R2": pivot + (high - low),
-"S1": (2 * pivot) - high,
-"S2": pivot - (high - low),
-}
-except Exception:
-continue
-return pivots
-@st.cache_data(ttl=300)
-def get_fear_greed() -> Tuple[str, str]:
+        try:
+            daily = yf.Ticker(t).history(period="10d", interval="1d", auto_adjust=True)
+            daily = normalize_columns(daily)
+            if len(daily) < 2:
+                continue
+            prev = daily.iloc[-2]
+            high, low, close = float(prev["high"]), float(prev["low"]), float(prev["close"])
+            pivot = (high + low + close) / 3
+            pivots[t] = {
+                "Pivot": pivot,
+                "R1": (2 * pivot) - low,
+                "R2": pivot + (high - low),
+                "S1": (2 * pivot) - high,
+                "S2": pivot - (high - low),
+            }
+        except Exception:
+            continue
+    return pivots
+
+
+@st.cache_data(ttl=300)def get_fear_greed() -> Tuple[str, str]:
 try:
 res = requests.get("alternative.me", headers=HEADERS, timeout=8).json()
 data = res["data"][0]
@@ -649,8 +625,8 @@ h_data["vwap"] = (h_data["close"] * h_data["volume"]).cumsum() / h_data["volume"
 if show_vs_btc and btc_data is not None:
 common_idx = h_data.index.intersection(btc_data.index)
 if len(common_idx) > 5:
-asset_norm = h_data.loc[common_idx, "close"] / h_data.loc[common_idx, "close"].iloc[-1]
-btc_norm = btc_data.loc[common_idx, "close"] / btc_data.loc[common_idx, "close"].iloc[-1]
+asset_norm = h_data.loc[common_idx, "close"] / h_data.loc[common_idx, "close"].iloc[0]
+btc_norm = btc_data.loc[common_idx, "close"] / btc_data.loc[common_idx, "close"].iloc[0]
 h_data.loc[common_idx, "vs_btc"] = (asset_norm / btc_norm - 1) * 100
 rows = 1
 if show_rsi: rows += 1
@@ -805,15 +781,12 @@ st_autorefresh(interval=rf_rate * 1000, key="datarefresh")
 st.markdown('OneStop-InfoSpot', unsafe_allow_html=True)
 st.markdown('📈 Asset Intelligence Terminal', unsafe_allow_html=True)
 st.caption("Dark mode • Candlesticks • Long/Short + OI + Funding • RSI • MACD • Bollinger • On-chain • Global Macro")
-
-Initializing Native UI Workspace Decoupling Tabs
-
 tab_crypto, tab_macro = st.tabs(["⚡ Crypto Intelligence Terminal", "🌐 Global Macro Insights"])
 
 ------------------------------------------------------------
 
 
-TAB 1: CRYPTO INTELLIGENCE WORKSPACE (YOUR ORIGINAL LOGIC)
+TAB 1: CRYPTO INTELLIGENCE WORKSPACE
 
 
 ------------------------------------------------------------
@@ -845,7 +818,7 @@ futures_table_rows = []
 for t, hist in data.items():
 if hist.empty or "close" not in hist.columns:
 continue
-s_px = float(hist["close"].iloc[-1])
+s_px = float(hist["close"].iloc[0])
 combined_df[t] = ((hist["close"] / s_px) - 1) * 100
 c_px = float(hist["close"].iloc[-1])
 p_px = float(hist["close"].iloc[-2]) if len(hist) > 1 else c_px
@@ -942,9 +915,9 @@ cols[2].metric("%B (BB)", f"{bb_pos * 100:.1f}%")
 if show_baseline:
 baseline = h_data["close"].mean()
 dist = ((h_data["close"].iloc[-1] / baseline) - 1) * 100
-cols[3].metric("vs Baseline", f"{dist:+.1f}%")
+cols.metric("vs Baseline", f"{dist:+.1f}%")
 if show_vs_btc and "vs_btc" in h_data.columns:
-cols[4].metric("vs BTC", f"{h_data['vs_btc'].iloc[-1]:+.1f}%")
+cols.metric("vs BTC", f"{h_data['vs_btc'].iloc[-1]:+.1f}%")
 st.markdown("#### 🔥 Liquidity Map (Estimated Liquidation Levels)")
 p = liquidity_profiles[m_tgt]
 st.caption(f"Source of Long/Short: {p['source']} | Liquidation levels are estimated")
@@ -1030,7 +1003,6 @@ macro_data = load_macro_data()
 if not macro_data:
 st.info("Macro matrix data endpoints temporarily unavailable. Retrying query package updates...")
 else:
-# 1. Macro Summary Cards Grid
 m_cols = st.columns(3)
 m_index = 0
 for name, m_df in macro_data.items():
@@ -1044,13 +1016,12 @@ col_target.metric(name, f"{current_p:.2f}%", f"{pct_delta:+.2f}%")
 else:
 col_target.metric(name, f"${current_p:,.2f}", f"{pct_delta:+.2f}%")
 m_index += 1
-# 2. Normalized Comparative Performance Visualizer
 st.markdown("#### 📉 90-Day Normalized Comparative Performance Matrix")
 st.caption("All indices normalized to zero base from original baseline inception interval to pinpoint risk-on/risk-off decoupling triggers.")
 macro_combined = pd.DataFrame()
 for name, m_df in macro_data.items():
 if not m_df.empty and "close" in m_df.columns:
-base_p = float(m_df["close"].iloc[-1])
+base_p = float(m_df["close"].iloc[0])
 macro_combined[name] = ((m_df["close"] / base_p) - 1) * 100
 if not macro_combined.empty:
 fig_macro = go.Figure()
