@@ -318,6 +318,70 @@ def check_alerts(alerts: list, data: dict, liquidity_profiles: dict, patterns_by
     return triggered
 
 
+
+# ============================================================
+# 2e. ANALYSIS TOOLS HELPERS
+# ============================================================
+def compute_correlation_matrix(data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """Build a close-price returns correlation matrix for the given tickers."""
+    closes = {}
+    for t, df in data.items():
+        if df is not None and not df.empty and "close" in df.columns:
+            closes[t] = df["close"]
+    if len(closes) < 2:
+        return pd.DataFrame()
+    combined = pd.DataFrame(closes).dropna(how="all")
+    returns = combined.pct_change().dropna()
+    if returns.empty:
+        return pd.DataFrame()
+    return returns.corr()
+
+
+def compute_volatility_stats(data: Dict[str, pd.DataFrame], window: int = 30) -> pd.DataFrame:
+    """Compute recent volatility and ATR stats for each ticker."""
+    rows = []
+    for t, df in data.items():
+        if df is None or df.empty or "close" not in df.columns:
+            continue
+        rets = df["close"].pct_change().dropna()
+        vol_30 = rets.tail(window).std() * np.sqrt(365) * 100 if len(rets) >= 5 else np.nan  # annualized approx
+        vol_7 = rets.tail(7).std() * np.sqrt(365) * 100 if len(rets) >= 5 else np.nan
+        atr_val = df["atr"].iloc[-1] if "atr" in df.columns and not pd.isna(df["atr"].iloc[-1]) else np.nan
+        price = df["close"].iloc[-1]
+        atr_pct = (atr_val / price) * 100 if price and atr_val and not pd.isna(atr_val) else np.nan
+        rows.append({
+            "Ticker": t,
+            "Price": price,
+            "Vol 7d (ann%)": vol_7,
+            "Vol 30d (ann%)": vol_30,
+            "ATR": atr_val,
+            "ATR %": atr_pct,
+        })
+    return pd.DataFrame(rows)
+
+
+def compute_multi_period_performance(data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """Performance over multiple lookback periods."""
+    rows = []
+    for t, df in data.items():
+        if df is None or len(df) < 5 or "close" not in df.columns:
+            continue
+        close = df["close"]
+        current = close.iloc[-1]
+        def ret(n):
+            if len(close) > n:
+                return ((current / close.iloc[-n-1]) - 1) * 100
+            return np.nan
+        rows.append({
+            "Ticker": t,
+            "1D %": ret(1),
+            "7D %": ret(7),
+            "30D %": ret(30),
+            "90D %": ret(90),
+            "YTD %": ret(min(len(close)-1, 252)),
+        })
+    return pd.DataFrame(rows)
+
 # ============================================================
 # 3. ADVANCED TECHNICAL INDICATORS ALGORITHMS
 # ============================================================
@@ -1478,10 +1542,11 @@ with col_users:
 
 st.caption("Dark mode • Candlesticks • Pattern Recognition • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro • 15Y Historical • Predictive Analytics")
 
-tab_crypto, tab_macro, tab_predict = st.tabs([
+tab_crypto, tab_macro, tab_predict, tab_analysis = st.tabs([
     "⚡ Crypto Intelligence Terminal",
     "🌐 Global Macro Insights",
-    "🔮 Predictive Analytics"
+    "🔮 Predictive Analytics",
+    "📊 Analysis Tools"
 ])
 
 with tab_crypto:
@@ -1995,4 +2060,107 @@ with tab_predict:
                     "does **not** constitute financial, investment, or trading advice. Markets can remain irrational "
                     "longer than models can stay solvent. Always do your own research."
                 )
+
+# ============================================================
+# ANALYSIS TOOLS TAB
+# ============================================================
+with tab_analysis:
+    st.subheader("📊 Advanced Analysis Tools")
+    st.caption("Correlation • Volatility • Multi-period Performance — all derived from the currently loaded tickers.")
+
+    if not tkrs:
+        st.info("Enter at least one ticker in the sidebar to use the analysis tools.")
+    else:
+        analysis_data = load_ticker_data(tuple(tkrs), interval, lookback_bars, period, is_6h)
+
+        if not analysis_data or len(analysis_data) == 0:
+            st.warning("No valid data available for analysis. Try different tickers or a different resolution.")
+        else:
+            # ----- 1. Multi-Period Performance -----
+            st.markdown("### 📈 Multi-Period Performance")
+            perf_df = compute_multi_period_performance(analysis_data)
+            if not perf_df.empty:
+                # Format percentages
+                display_perf = perf_df.copy()
+                for col in ["1D %", "7D %", "30D %", "90D %", "YTD %"]:
+                    if col in display_perf.columns:
+                        display_perf[col] = display_perf[col].apply(lambda x: f"{x:+.2f}%" if pd.notna(x) else "N/A")
+                st.dataframe(display_perf.set_index("Ticker"), use_container_width=True)
+            else:
+                st.info("Not enough history to compute performance.")
+
+            st.markdown("---")
+
+            # ----- 2. Volatility Dashboard -----
+            st.markdown("### 📉 Volatility Dashboard")
+            vol_df = compute_volatility_stats(analysis_data)
+            if not vol_df.empty:
+                display_vol = vol_df.copy()
+                display_vol["Price"] = display_vol["Price"].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "N/A")
+                display_vol["Vol 7d (ann%)"] = display_vol["Vol 7d (ann%)"].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A")
+                display_vol["Vol 30d (ann%)"] = display_vol["Vol 30d (ann%)"].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A")
+                display_vol["ATR"] = display_vol["ATR"].apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "N/A")
+                display_vol["ATR %"] = display_vol["ATR %"].apply(lambda x: f"{x:.2f}%" if pd.notna(x) else "N/A")
+                st.dataframe(display_vol.set_index("Ticker"), use_container_width=True)
+
+                # Simple bar chart of 30d volatility
+                try:
+                    fig_vol = go.Figure()
+                    fig_vol.add_trace(go.Bar(
+                        x=vol_df["Ticker"],
+                        y=vol_df["Vol 30d (ann%)"],
+                        marker_color="#00BFFF",
+                        text=vol_df["Vol 30d (ann%)"].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else ""),
+                        textposition="auto"
+                    ))
+                    fig_vol.update_layout(
+                        title="30-Day Annualized Volatility",
+                        height=320,
+                        template="plotly_dark",
+                        paper_bgcolor="#0e1117",
+                        plot_bgcolor="#0e1117",
+                        font=dict(family="Playfair Display, serif"),
+                        margin=dict(l=10, r=10, t=40, b=10),
+                        yaxis_title="Volatility %"
+                    )
+                    st.plotly_chart(fig_vol, use_container_width=True)
+                except Exception:
+                    pass
+            else:
+                st.info("Not enough data for volatility stats.")
+
+            st.markdown("---")
+
+            # ----- 3. Correlation Matrix -----
+            st.markdown("### 🔗 Correlation Matrix (Returns)")
+            st.caption("Based on daily (or current resolution) returns of the loaded tickers. Values near +1 move together; near -1 move inversely.")
+            corr = compute_correlation_matrix(analysis_data)
+            if not corr.empty and len(corr) >= 2:
+                try:
+                    fig_corr = go.Figure(data=go.Heatmap(
+                        z=corr.values,
+                        x=corr.columns.tolist(),
+                        y=corr.index.tolist(),
+                        colorscale="RdBu",
+                        zmid=0,
+                        text=np.round(corr.values, 2),
+                        texttemplate="%{text}",
+                        textfont={"size": 12},
+                        colorbar=dict(title="Corr")
+                    ))
+                    fig_corr.update_layout(
+                        height=420,
+                        template="plotly_dark",
+                        paper_bgcolor="#0e1117",
+                        plot_bgcolor="#0e1117",
+                        font=dict(family="Playfair Display, serif"),
+                        margin=dict(l=10, r=10, t=20, b=10),
+                    )
+                    st.plotly_chart(fig_corr, use_container_width=True)
+                except Exception as e:
+                    st.write(corr.round(2))
+            else:
+                st.info("Need at least 2 tickers with overlapping history to build a correlation matrix.")
+
+
 st.sidebar.success(f"Last refresh: {pd.Timestamp.now().strftime('%H:%M:%S')}")
