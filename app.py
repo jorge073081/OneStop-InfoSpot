@@ -382,6 +382,125 @@ def compute_multi_period_performance(data: Dict[str, pd.DataFrame]) -> pd.DataFr
         })
     return pd.DataFrame(rows)
 
+
+# ============================================================
+# 2f. PHASE 4 HELPERS – Backtesting, Multi-TF, Export, Alert History
+# ============================================================
+import io as _io
+from datetime import datetime
+
+ALERT_HISTORY_FILE = "alert_history.json"
+
+def load_alert_history() -> list:
+    return load_json_file(ALERT_HISTORY_FILE, [])
+
+def save_alert_history(history: list):
+    # Keep last 200 entries only
+    save_json_file(ALERT_HISTORY_FILE, history[-200:])
+
+def log_triggered_alerts(triggered: list):
+    if not triggered:
+        return
+    history = load_alert_history()
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    for msg in triggered:
+        history.append({"time": now, "message": msg})
+    save_alert_history(history)
+
+
+def run_rsi_backtest(df: pd.DataFrame, low=30, high=70):
+    """Simple RSI mean-reversion backtest. Returns stats + equity curve."""
+    if df is None or len(df) < 30 or "rsi" not in df.columns or "close" not in df.columns:
+        return None
+    data = df[["close", "rsi"]].dropna().copy()
+    data["signal"] = 0
+    data.loc[data["rsi"] < low, "signal"] = 1   # buy
+    data.loc[data["rsi"] > high, "signal"] = -1  # sell
+    data["position"] = data["signal"].replace(to_replace=0, method="ffill").fillna(0)
+    data["returns"] = data["close"].pct_change()
+    data["strategy"] = data["position"].shift(1) * data["returns"]
+    data["equity"] = (1 + data["strategy"].fillna(0)).cumprod()
+    
+    total_return = (data["equity"].iloc[-1] - 1) * 100
+    buy_hold = (data["close"].iloc[-1] / data["close"].iloc[0] - 1) * 100
+    max_dd = ((data["equity"] / data["equity"].cummax()) - 1).min() * 100
+    trades = data["position"].diff().abs().sum() / 2
+    win_rate = (data.loc[data["strategy"] > 0, "strategy"].count() / max(1, data.loc[data["strategy"] != 0, "strategy"].count())) * 100
+    
+    return {
+        "equity": data["equity"],
+        "total_return": total_return,
+        "buy_hold": buy_hold,
+        "max_drawdown": max_dd,
+        "approx_trades": int(trades),
+        "win_rate": win_rate,
+    }
+
+
+def run_sma_cross_backtest(df: pd.DataFrame):
+    """Simple 50/200 SMA crossover backtest."""
+    if df is None or len(df) < 210 or "sma50" not in df.columns or "sma200" not in df.columns:
+        return None
+    data = df[["close", "sma50", "sma200"]].dropna().copy()
+    data["signal"] = 0
+    data.loc[data["sma50"] > data["sma200"], "signal"] = 1
+    data.loc[data["sma50"] < data["sma200"], "signal"] = -1
+    data["position"] = data["signal"].replace(to_replace=0, method="ffill").fillna(0)
+    data["returns"] = data["close"].pct_change()
+    data["strategy"] = data["position"].shift(1) * data["returns"]
+    data["equity"] = (1 + data["strategy"].fillna(0)).cumprod()
+    
+    total_return = (data["equity"].iloc[-1] - 1) * 100
+    buy_hold = (data["close"].iloc[-1] / data["close"].iloc[0] - 1) * 100
+    max_dd = ((data["equity"] / data["equity"].cummax()) - 1).min() * 100
+    trades = data["position"].diff().abs().sum() / 2
+    
+    return {
+        "equity": data["equity"],
+        "total_return": total_return,
+        "buy_hold": buy_hold,
+        "max_drawdown": max_dd,
+        "approx_trades": int(trades),
+    }
+
+
+def get_multi_tf_summary(ticker: str) -> Dict[str, Dict]:
+    """Fetch key metrics across several timeframes for one ticker."""
+    tfs = {
+        "15m": {"interval": "15m", "period": "5d"},
+        "1h":  {"interval": "1h",  "period": "30d"},
+        "1d":  {"interval": "1d",  "period": "1y"},
+        "1wk": {"interval": "1wk", "period": "5y"},
+    }
+    results = {}
+    for label, cfg in tfs.items():
+        try:
+            hist = yf.Ticker(ticker).history(period=cfg["period"], interval=cfg["interval"], auto_adjust=True)
+            hist = normalize_columns(hist, target_ticker=ticker)
+            if hist.empty or "close" not in hist.columns:
+                continue
+            hist = add_indicators(hist)
+            last = hist.iloc[-1]
+            change = 0.0
+            if len(hist) > 1:
+                change = ((last["close"] / hist["close"].iloc[-2]) - 1) * 100
+            results[label] = {
+                "price": float(last["close"]),
+                "change": change,
+                "rsi": float(last["rsi"]) if "rsi" in hist.columns and not pd.isna(last["rsi"]) else None,
+                "sma50": float(last["sma50"]) if "sma50" in hist.columns and not pd.isna(last["sma50"]) else None,
+            }
+        except Exception:
+            continue
+    return results
+
+
+def dataframe_to_csv_bytes(df: pd.DataFrame) -> bytes:
+    """Return CSV bytes for Streamlit download button."""
+    buf = _io.StringIO()
+    df.to_csv(buf, index=True)
+    return buf.getvalue().encode()
+
 # ============================================================
 # 3. ADVANCED TECHNICAL INDICATORS ALGORITHMS
 # ============================================================
@@ -1542,11 +1661,12 @@ with col_users:
 
 st.caption("Dark mode • Candlesticks • Pattern Recognition • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro • 15Y Historical • Predictive Analytics")
 
-tab_crypto, tab_macro, tab_predict, tab_analysis = st.tabs([
+tab_crypto, tab_macro, tab_predict, tab_analysis, tab_tools = st.tabs([
     "⚡ Crypto Intelligence Terminal",
     "🌐 Global Macro Insights",
     "🔮 Predictive Analytics",
-    "📊 Analysis Tools"
+    "📊 Analysis Tools",
+    "🛠️ Backtest & Tools"
 ])
 
 with tab_crypto:
@@ -1589,6 +1709,7 @@ with tab_crypto:
                     patterns_by_ticker
                 )
                 if triggered:
+                    log_triggered_alerts(triggered)
                     for msg in triggered:
                         st.warning(msg)
 
@@ -2161,6 +2282,175 @@ with tab_analysis:
                     st.write(corr.round(2))
             else:
                 st.info("Need at least 2 tickers with overlapping history to build a correlation matrix.")
+
+
+
+# ============================================================
+# BACKTEST & TOOLS TAB (Phase 4)
+# ============================================================
+with tab_tools:
+    st.subheader("🛠️ Backtesting • Multi-Timeframe • Export")
+    
+    tool_sub = st.radio(
+        "Select tool:",
+        ["📈 Backtesting", "⏱️ Multi-Timeframe View", "🔔 Alert History", "📥 Export Data"],
+        horizontal=True
+    )
+    
+    # ---------- BACKTESTING ----------
+    if tool_sub == "📈 Backtesting":
+        st.markdown("### Simple Strategy Backtester")
+        st.caption("Educational tool only. Past performance ≠ future results. No fees/slippage modeled.")
+        
+        if not tkrs:
+            st.info("Load at least one ticker in the sidebar first.")
+        else:
+            bt_ticker = st.selectbox("Ticker to backtest", tkrs, key="bt_ticker")
+            strategy = st.selectbox("Strategy", ["RSI Mean Reversion (30/70)", "SMA 50/200 Crossover"], key="bt_strat")
+            
+            bt_data = load_ticker_data((bt_ticker,), "1d", 500, "2y", False)
+            df = bt_data.get(bt_ticker)
+            
+            if df is None or df.empty:
+                st.warning("Could not load enough history for backtesting.")
+            else:
+                if strategy.startswith("RSI"):
+                    result = run_rsi_backtest(df)
+                else:
+                    result = run_sma_cross_backtest(df)
+                
+                if result is None:
+                    st.warning("Not enough data points for this strategy (need longer history).")
+                else:
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Strategy Return", f"{result['total_return']:+.1f}%")
+                    c2.metric("Buy & Hold", f"{result['buy_hold']:+.1f}%")
+                    c3.metric("Max Drawdown", f"{result['max_drawdown']:.1f}%")
+                    c4.metric("Approx Trades", result.get("approx_trades", "N/A"))
+                    
+                    if "win_rate" in result:
+                        st.caption(f"Win rate (approx): {result['win_rate']:.0f}%")
+                    
+                    fig_eq = go.Figure()
+                    fig_eq.add_trace(go.Scatter(
+                        x=result["equity"].index,
+                        y=result["equity"],
+                        name="Strategy Equity",
+                        line=dict(color="#00FF7F", width=2)
+                    ))
+                    fig_eq.update_layout(
+                        title=f"Equity Curve — {bt_ticker} — {strategy}",
+                        height=380,
+                        template="plotly_dark",
+                        paper_bgcolor="#0e1117",
+                        plot_bgcolor="#0e1117",
+                        font=dict(family="Playfair Display, serif"),
+                        margin=dict(l=10, r=10, t=40, b=10),
+                        yaxis_title="Growth of $1"
+                    )
+                    st.plotly_chart(fig_eq, use_container_width=True)
+    
+    # ---------- MULTI-TIMEFRAME ----------
+    elif tool_sub == "⏱️ Multi-Timeframe View":
+        st.markdown("### Multi-Timeframe Snapshot")
+        st.caption("Quick view of the same asset across 15m • 1h • Daily • Weekly")
+        
+        if not tkrs:
+            st.info("Load at least one ticker first.")
+        else:
+            mtf_ticker = st.selectbox("Select ticker", tkrs, key="mtf_ticker")
+            with st.spinner(f"Loading multi-timeframe data for {mtf_ticker}..."):
+                mtf = get_multi_tf_summary(mtf_ticker)
+            
+            if not mtf:
+                st.warning("Could not load multi-timeframe data.")
+            else:
+                cols = st.columns(len(mtf))
+                for i, (tf, vals) in enumerate(mtf.items()):
+                    with cols[i]:
+                        st.markdown(f"**{tf.upper()}**")
+                        st.metric("Price", f"${vals['price']:,.2f}", f"{vals['change']:+.2f}%")
+                        if vals.get("rsi") is not None:
+                            st.write(f"RSI: {vals['rsi']:.1f}")
+                        if vals.get("sma50") is not None:
+                            st.write(f"SMA50: ${vals['sma50']:,.2f}")
+    
+    # ---------- ALERT HISTORY ----------
+    elif tool_sub == "🔔 Alert History":
+        st.markdown("### Alert History (last 200)")
+        history = load_alert_history()
+        if not history:
+            st.info("No alerts have been triggered yet.")
+        else:
+            hist_df = pd.DataFrame(history[::-1])  # newest first
+            st.dataframe(hist_df, use_container_width=True, hide_index=True)
+            if st.button("Clear Alert History"):
+                save_alert_history([])
+                st.success("History cleared")
+                st.rerun()
+    
+    # ---------- EXPORT ----------
+    elif tool_sub == "📥 Export Data":
+        st.markdown("### Export Data")
+        st.caption("Download current data as CSV files.")
+        
+        if not tkrs:
+            st.info("Load tickers first to enable exports.")
+        else:
+            export_data = load_ticker_data(tuple(tkrs), interval, lookback_bars, period, is_6h)
+            
+            # Performance export
+            perf_df = compute_multi_period_performance(export_data)
+            if not perf_df.empty:
+                st.download_button(
+                    "Download Performance CSV",
+                    data=dataframe_to_csv_bytes(perf_df.set_index("Ticker")),
+                    file_name="performance.csv",
+                    mime="text/csv"
+                )
+            
+            # Volatility export
+            vol_df = compute_volatility_stats(export_data)
+            if not vol_df.empty:
+                st.download_button(
+                    "Download Volatility CSV",
+                    data=dataframe_to_csv_bytes(vol_df.set_index("Ticker")),
+                    file_name="volatility.csv",
+                    mime="text/csv"
+                )
+            
+            # Portfolio export
+            if st.session_state.get("portfolio"):
+                pf_df = pd.DataFrame(st.session_state.portfolio)
+                st.download_button(
+                    "Download Portfolio CSV",
+                    data=dataframe_to_csv_bytes(pf_df),
+                    file_name="portfolio.csv",
+                    mime="text/csv"
+                )
+            
+            # Alerts export
+            if st.session_state.get("alerts"):
+                al_df = pd.DataFrame(st.session_state.alerts)
+                st.download_button(
+                    "Download Active Alerts CSV",
+                    data=dataframe_to_csv_bytes(al_df),
+                    file_name="alerts.csv",
+                    mime="text/csv"
+                )
+            
+            # Alert history export
+            hist = load_alert_history()
+            if hist:
+                hist_df = pd.DataFrame(hist)
+                st.download_button(
+                    "Download Alert History CSV",
+                    data=dataframe_to_csv_bytes(hist_df),
+                    file_name="alert_history.csv",
+                    mime="text/csv"
+                )
+            
+            st.success("Use the buttons above to download CSV files.")
 
 
 st.sidebar.success(f"Last refresh: {pd.Timestamp.now().strftime('%H:%M:%S')}")
