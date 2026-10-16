@@ -216,6 +216,47 @@ def get_active_user_count(timeout_seconds: int = 90) -> int:
     
     return len(store)
 
+
+# ============================================================
+# 2c. WATCHLIST & PORTFOLIO HELPERS
+# ============================================================
+import json
+import os
+
+WATCHLIST_FILE = "user_watchlist.json"
+PORTFOLIO_FILE = "user_portfolio.json"
+
+def load_json_file(path: str, default=None):
+    if default is None:
+        default = []
+    if os.path.exists(path):
+        try:
+            with open(path, "r") as f:
+                return json.load(f)
+        except Exception:
+            return default
+    return default
+
+def save_json_file(path: str, data):
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+def load_watchlist() -> list:
+    return load_json_file(WATCHLIST_FILE, [])
+
+def save_watchlist(tickers: list):
+    save_json_file(WATCHLIST_FILE, tickers)
+
+def load_portfolio() -> list:
+    """List of dicts: {ticker, qty, entry_price}"""
+    return load_json_file(PORTFOLIO_FILE, [])
+
+def save_portfolio(portfolio: list):
+    save_json_file(PORTFOLIO_FILE, portfolio)
+
 # ============================================================
 # 3. ADVANCED TECHNICAL INDICATORS ALGORITHMS
 # ============================================================
@@ -247,6 +288,22 @@ def compute_bollinger(
     lower = sma - (std * num_std)
     return sma, upper, lower
 
+def compute_stochastic(df: pd.DataFrame, k_period: int = 14, d_period: int = 3) -> Tuple[pd.Series, pd.Series]:
+    """Compute Stochastic Oscillator %K and %D"""
+    low_min = df["low"].rolling(window=k_period).min()
+    high_max = df["high"].rolling(window=k_period).max()
+    k = 100 * (df["close"] - low_min) / (high_max - low_min)
+    d = k.rolling(window=d_period).mean()
+    return k, d
+
+def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Average True Range"""
+    high_low = df["high"] - df["low"]
+    high_close = (df["high"] - df["close"].shift()).abs()
+    low_close = (df["low"] - df["close"].shift()).abs()
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    return tr.rolling(period).mean()
+
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty or "close" not in df.columns:
         return df
@@ -256,6 +313,10 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["rsi"] = compute_rsi(df["close"])
     df["macd"], df["macd_signal"], df["macd_hist"] = compute_macd(df["close"])
     df["bb_mid"], df["bb_upper"], df["bb_lower"] = compute_bollinger(df["close"])
+    # New indicators
+    if all(c in df.columns for c in ["high", "low"]):
+        df["stoch_k"], df["stoch_d"] = compute_stochastic(df)
+        df["atr"] = compute_atr(df)
     return df
 
 # ============================================================
@@ -1037,6 +1098,8 @@ def build_asset_chart(
     show_bb: bool,
     show_rsi: bool,
     show_macd: bool,
+    show_stoch: bool,
+    show_atr: bool,
     show_vol_profile: bool,
     show_baseline: bool,
     show_long_baseline: bool,
@@ -1059,12 +1122,16 @@ def build_asset_chart(
     rows = 1
     if show_rsi: rows += 1
     if show_macd: rows += 1
+    if show_stoch: rows += 1
+    if show_atr: rows += 1
     if show_vol_profile: rows += 1
     if show_vs_btc and "vs_btc" in h_data.columns: rows += 1
-    row_heights = [0.50] + [0.125] * (rows - 1) if rows > 1 else [1.0]
+    row_heights = [0.45] + [0.11] * (rows - 1) if rows > 1 else [1.0]
     subplot_titles = ["Price"]
     if show_rsi: subplot_titles.append("RSI (14)")
     if show_macd: subplot_titles.append("MACD")
+    if show_stoch: subplot_titles.append("Stochastic")
+    if show_atr: subplot_titles.append("ATR (14)")
     if show_vol_profile: subplot_titles.append("Volume Profile")
     if show_vs_btc and "vs_btc" in h_data.columns: subplot_titles.append("vs BTC (%)")
     fig = make_subplots(
@@ -1139,6 +1206,19 @@ def build_asset_chart(
                                  line=dict(color="#00BFFF", width=1.5)), row=current_row, col=1)
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["macd_signal"], name="Signal",
                                  line=dict(color="#FF69B4", width=1.5)), row=current_row, col=1)
+    if show_stoch and "stoch_k" in h_data.columns:
+        current_row += 1
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["stoch_k"], name="%K",
+                                 line=dict(color="#00FFFF", width=1.5)), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["stoch_d"], name="%D",
+                                 line=dict(color="#FFD700", width=1.5)), row=current_row, col=1)
+        fig.add_hline(y=80, line_dash="dash", line_color="red", row=current_row, col=1)
+        fig.add_hline(y=20, line_dash="dash", line_color="lime", row=current_row, col=1)
+        fig.update_yaxes(range=[0, 100], row=current_row, col=1)
+    if show_atr and "atr" in h_data.columns:
+        current_row += 1
+        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["atr"], name="ATR",
+                                 line=dict(color="#FF8C00", width=1.8)), row=current_row, col=1)
     if show_vol_profile and "volume" in h_data.columns:
         current_row += 1
         try:
@@ -1173,10 +1253,42 @@ def build_asset_chart(
 # 6. SIDEBAR CONTROLS
 # ============================================================
 st.sidebar.header("Controls")
-t_raw = st.sidebar.text_input("Enter Tickers (commas):", value="BTC-USD, ETH-USD, SOL-USD, XRP-USD")
+
+# --- WATCHLIST ---
+st.sidebar.subheader("⭐ Watchlist")
+if "watchlist" not in st.session_state:
+    st.session_state.watchlist = load_watchlist()
+
+wl_input = st.sidebar.text_input("Add to Watchlist (ticker)", placeholder="e.g. BTC-USD")
+if st.sidebar.button("➕ Add to Watchlist") and wl_input.strip():
+    t = wl_input.strip().upper()
+    if not t.endswith("-USD") and t.isalpha():
+        t = t + "-USD"
+    if t not in st.session_state.watchlist:
+        st.session_state.watchlist.append(t)
+        save_watchlist(st.session_state.watchlist)
+        st.sidebar.success(f"Added {t}")
+
+if st.session_state.watchlist:
+    st.sidebar.write("**Your Watchlist:**")
+    for i, t in enumerate(st.session_state.watchlist):
+        cols = st.sidebar.columns([3, 1])
+        cols[0].write(t)
+        if cols[1].button("x", key=f"rm_wl_{i}"):
+            st.session_state.watchlist.pop(i)
+            save_watchlist(st.session_state.watchlist)
+            st.rerun()
+    if st.sidebar.button("Use Watchlist as Tickers"):
+        t_raw = ", ".join(st.session_state.watchlist)
+else:
+    st.sidebar.caption("No tickers in watchlist yet.")
+
+# --- MAIN TICKER INPUT ---
+t_raw = st.sidebar.text_input("Enter Tickers (commas):", value="BTC-USD, ETH-USD, SOL-USD, XRP-USD", key="main_tickers")
 tkrs = [t.strip().upper() for t in t_raw.split(",") if t.strip()]
 res_disp = st.sidebar.selectbox("Resolution", list(RESOLUTION_MAP.keys()))
 rf_rate = st.sidebar.slider("Refresh Rate (Seconds)", 15, 120, 45)
+
 st.sidebar.subheader("Chart Type & Indicators")
 show_candles = st.sidebar.checkbox("Candlestick Chart", value=True)
 show_sma50 = st.sidebar.checkbox("50 SMA", value=True)
@@ -1184,12 +1296,13 @@ show_sma200 = st.sidebar.checkbox("200 SMA", value=True)
 show_bb = st.sidebar.checkbox("Bollinger Bands (20,2)", value=True)
 show_rsi = st.sidebar.checkbox("RSI (14)", value=True)
 show_macd = st.sidebar.checkbox("MACD (12,26,9)", value=True)
+show_stoch = st.sidebar.checkbox("Stochastic %K/%D", value=False)
+show_atr = st.sidebar.checkbox("ATR (14)", value=False)
 show_vol_profile = st.sidebar.checkbox("Volume Profile", value=True)
 
-# --- NEW: Chart Pattern Recognition Toggle ---
 st.sidebar.subheader("Pattern Recognition")
 show_patterns = st.sidebar.checkbox("Chart Pattern Recognition", value=False)
-st.sidebar.caption("Detects Doji, Hammer, Engulfing, Double Top/Bottom, Support & Resistance")
+st.sidebar.caption("Doji • Hammer • Engulfing • Double Top/Bottom • Support/Resistance")
 
 st.sidebar.subheader("Overlays & On-chain")
 show_baseline = st.sidebar.checkbox("Historical Baseline (Period Avg)", value=True)
@@ -1197,6 +1310,33 @@ show_long_baseline = st.sidebar.checkbox("Long-term Baseline (1Y Avg)", value=Fa
 show_vwap = st.sidebar.checkbox("VWAP", value=False)
 show_vs_btc = st.sidebar.checkbox("Relative Strength vs BTC", value=False)
 show_onchain = st.sidebar.checkbox("Show On-chain Metrics", value=True)
+
+# --- PORTFOLIO ---
+st.sidebar.subheader("💼 Simple Portfolio")
+if "portfolio" not in st.session_state:
+    st.session_state.portfolio = load_portfolio()
+
+with st.sidebar.expander("Add Holding"):
+    p_ticker = st.text_input("Ticker", placeholder="BTC-USD", key="p_ticker")
+    p_qty = st.number_input("Quantity", min_value=0.0, value=0.0, step=0.01, key="p_qty")
+    p_entry = st.number_input("Entry Price ($)", min_value=0.0, value=0.0, step=0.01, key="p_entry")
+    if st.button("Add to Portfolio") and p_ticker and p_qty > 0 and p_entry > 0:
+        t = p_ticker.strip().upper()
+        if not t.endswith("-USD") and t.isalpha():
+            t = t + "-USD"
+        st.session_state.portfolio.append({"ticker": t, "qty": p_qty, "entry_price": p_entry})
+        save_portfolio(st.session_state.portfolio)
+        st.success(f"Added {p_qty} {t}")
+        st.rerun()
+
+if st.session_state.portfolio:
+    st.sidebar.write("**Holdings:**")
+    for i, h in enumerate(st.session_state.portfolio):
+        st.sidebar.caption(f"{h['qty']} {h['ticker']} @ ${h['entry_price']:,.2f}")
+        if st.sidebar.button(f"Remove {h['ticker']}", key=f"rm_pf_{i}"):
+            st.session_state.portfolio.pop(i)
+            save_portfolio(st.session_state.portfolio)
+            st.rerun()
 res_cfg = RESOLUTION_MAP[res_disp]
 interval = res_cfg["interval"]
 lookback_bars = res_cfg["lookback"]
@@ -1303,6 +1443,56 @@ with tab_crypto:
                                   margin=dict(l=10, r=10, t=30, b=10),
                                   font=dict(family="Playfair Display, serif"))
                 st.plotly_chart(fig, use_container_width=True)
+            
+            # ========== PORTFOLIO SUMMARY ==========
+            if st.session_state.get("portfolio"):
+                st.subheader("💼 Portfolio Performance")
+                pf_rows = []
+                total_cost = 0.0
+                total_value = 0.0
+                for h in st.session_state.portfolio:
+                    t = h["ticker"]
+                    qty = float(h["qty"])
+                    entry = float(h["entry_price"])
+                    cost = qty * entry
+                    total_cost += cost
+                    current = None
+                    if t in data and not data[t].empty and "close" in data[t].columns:
+                        current = float(data[t]["close"].iloc[-1])
+                    if current is not None:
+                        value = qty * current
+                        pnl = value - cost
+                        pnl_pct = (pnl / cost) * 100 if cost > 0 else 0
+                        total_value += value
+                        pf_rows.append({
+                            "Ticker": t,
+                            "Qty": qty,
+                            "Entry": f"${entry:,.2f}",
+                            "Current": f"${current:,.2f}",
+                            "Value": f"${value:,.2f}",
+                            "P&L": f"${pnl:+,.2f}",
+                            "P&L %": f"{pnl_pct:+.2f}%",
+                        })
+                    else:
+                        pf_rows.append({
+                            "Ticker": t,
+                            "Qty": qty,
+                            "Entry": f"${entry:,.2f}",
+                            "Current": "N/A",
+                            "Value": "N/A",
+                            "P&L": "N/A",
+                            "P&L %": "N/A",
+                        })
+                if pf_rows:
+                    st.dataframe(pd.DataFrame(pf_rows), use_container_width=True, hide_index=True)
+                    if total_cost > 0 and total_value > 0:
+                        total_pnl = total_value - total_cost
+                        total_pnl_pct = (total_pnl / total_cost) * 100
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("Total Cost", f"${total_cost:,.2f}")
+                        c2.metric("Current Value", f"${total_value:,.2f}")
+                        c3.metric("Total P&L", f"${total_pnl:+,.2f}", f"{total_pnl_pct:+.2f}%")
+
             st.subheader("🔥 Asset Analysis Frameworks")
             m_tgt = st.selectbox("Select Target Asset:", list(liquidity_profiles.keys()))
             if m_tgt and m_tgt in data:
@@ -1325,6 +1515,8 @@ with tab_crypto:
                     show_bb=show_bb,
                     show_rsi=show_rsi,
                     show_macd=show_macd,
+                    show_stoch=show_stoch,
+                    show_atr=show_atr,
                     show_vol_profile=show_vol_profile,
                     show_baseline=show_baseline,
                     show_long_baseline=show_long_baseline,
@@ -1648,5 +1840,4 @@ with tab_predict:
                     "does **not** constitute financial, investment, or trading advice. Markets can remain irrational "
                     "longer than models can stay solvent. Always do your own research."
                 )
-
 st.sidebar.success(f"Last refresh: {pd.Timestamp.now().strftime('%H:%M:%S')}")
