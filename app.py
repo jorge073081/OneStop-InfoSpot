@@ -133,6 +133,13 @@ st.markdown(
             color: #0e1117 !important;
             border-color: #00FF7F;
         }
+        /* Search bar styling */
+        .stTextInput > div > div > input {
+            background-color: #1a1d24 !important;
+            border: 1px solid #3b4252 !important;
+            color: #fafafa !important;
+            border-radius: 8px !important;
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -345,7 +352,7 @@ def get_fear_greed() -> Tuple[str, str]:
         return "N/A", "Unavailable"
 
 @st.cache_data(ttl=90, show_spinner="Fetching fresh crypto news...")
-def get_crypto_news(cache_buster: str, max_items: int = 12) -> List[Dict]:
+def get_crypto_news(cache_buster: str, max_items: int = 20) -> List[Dict]:
     feeds = {
         "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
         "CoinTelegraph": "https://cointelegraph.com/rss",
@@ -980,7 +987,24 @@ with col_title:
 with col_users:
     st.metric("🟢 Active Users", active_users)
 
-st.caption("Dark mode • Candlesticks • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro • 15Y Historical • Predictive Analytics")
+# ========== SEARCH BAR AT THE TOP ==========
+search_col1, search_col2 = st.columns([4, 1])
+with search_col1:
+    search_query = st.text_input(
+        "🔍 Search",
+        placeholder="Search news keywords or type a ticker (e.g. BTC, Ethereum, regulation, ETF)...",
+        label_visibility="collapsed",
+        key="global_search"
+    )
+with search_col2:
+    search_mode = st.selectbox(
+        "Mode",
+        ["News Filter", "Ticker Focus"],
+        label_visibility="collapsed",
+        key="search_mode"
+    )
+
+st.caption("Dark mode • Candlesticks • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro • 15Y Historical • Predictive Analytics • Live Search")
 
 tab_crypto, tab_macro, tab_predict = st.tabs([
     "⚡ Crypto Intelligence Terminal",
@@ -992,11 +1016,25 @@ with tab_crypto:
     if not tkrs:
         st.info("Enter at least one ticker in the sidebar.")
     else:
-        data = load_ticker_data(tuple(tkrs), interval, lookback_bars, period, is_6h)
+        # Optional: Ticker Focus mode from search bar
+        active_tickers = tkrs
+        if search_mode == "Ticker Focus" and search_query.strip():
+            q = search_query.strip().upper()
+            # Try to match against current tickers or treat as new ticker
+            matched = [t for t in tkrs if q in t or t.replace("-USD", "") == q]
+            if matched:
+                active_tickers = matched
+            else:
+                # Allow user to quickly analyze a new ticker typed in search
+                possible = q if q.endswith("-USD") else f"{q}-USD"
+                active_tickers = [possible]
+                st.info(f"Focusing analysis on **{possible}** (from search bar)")
+
+        data = load_ticker_data(tuple(active_tickers), interval, lookback_bars, period, is_6h)
         if not data:
             st.error("No valid data loaded. Check tickers or try a different resolution.")
         else:
-            daily_pivots = get_daily_pivots(tuple(tkrs))
+            daily_pivots = get_daily_pivots(tuple(active_tickers))
             btc_data = None
             if show_vs_btc:
                 if "BTC-USD" in data:
@@ -1161,6 +1199,18 @@ with tab_crypto:
                 st.subheader("📰 Live Crypto News")
                 pulse_key = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
                 news = get_crypto_news(cache_buster=pulse_key)
+                
+                # Apply News Filter from search bar
+                if search_mode == "News Filter" and search_query.strip():
+                    q = search_query.strip().lower()
+                    news = [
+                        art for art in news
+                        if q in art["title"].lower()
+                        or q in (art.get("summary") or "").lower()
+                        or q in art["source"].lower()
+                    ]
+                    st.caption(f"Showing {len(news)} articles matching **\"{search_query}\"**")
+                
                 if news:
                     sia = SIA()
                     for art in news:
@@ -1184,7 +1234,10 @@ with tab_crypto:
                             """
                             st.markdown(html_body, unsafe_allow_html=True)
                 else:
-                    st.info("No news articles available right now. Try refreshing.")
+                    if search_query.strip() and search_mode == "News Filter":
+                        st.info(f"No news articles found matching \"{search_query}\". Try a different keyword.")
+                    else:
+                        st.info("No news articles available right now. Try refreshing.")
             with col2:
                 st.subheader("📊 Sentiment")
                 fng_v, fng_c = get_fear_greed()
