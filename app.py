@@ -206,17 +206,14 @@ def get_active_user_count(timeout_seconds: int = 90) -> int:
     """
     store = get_active_users_store()
     
-    # Assign a stable session id
     if "session_id" not in st.session_state:
         st.session_state.session_id = str(uuid.uuid4())
     
     session_id = st.session_state.session_id
     now = time.time()
     
-    # Heartbeat
     store[session_id] = now
     
-    # Clean up stale sessions
     stale = [sid for sid, last in store.items() if now - last > timeout_seconds]
     for sid in stale:
         del store[sid]
@@ -465,7 +462,6 @@ def get_futures_metrics(ticker: str, current_price: float = 0.0) -> Dict[str, An
         "errors": [],
     }
     try:
-        # Long / Short Account Ratio
         r = requests.get(
             f"https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio"
             f"?ccy={ccy}&period=1H",
@@ -480,7 +476,6 @@ def get_futures_metrics(ticker: str, current_price: float = 0.0) -> Dict[str, An
                 long_pct = (ratio / (1 + ratio)) * 100
                 result["long_pct"] = round(long_pct, 1)
                 result["short_pct"] = round(100 - long_pct, 1)
-        # Open Interest
         r = requests.get(
             f"https://www.okx.com/api/v5/public/open-interest?instType=SWAP&instId={symbol_okx}",
             headers=HEADERS,
@@ -491,7 +486,6 @@ def get_futures_metrics(ticker: str, current_price: float = 0.0) -> Dict[str, An
             oi = safe_float(data["data"][0].get("oiCcy") or data["data"][0].get("oi"))
             if oi:
                 result["oi"] = oi
-        # Funding Rate
         r = requests.get(
             f"https://www.okx.com/api/v5/public/funding-rate?instId={symbol_okx}",
             headers=HEADERS,
@@ -505,7 +499,6 @@ def get_futures_metrics(ticker: str, current_price: float = 0.0) -> Dict[str, An
     except Exception as e:
         result["errors"].append(str(e)[:100])
         result["source"] = "OKX (partial failure)"
-    # Safety fallback
     if result["long_pct"] is None:
         result["long_pct"] = 50.0
         result["short_pct"] = 50.0
@@ -531,7 +524,284 @@ def load_macro_data() -> Dict[str, pd.DataFrame]:
         except Exception:
             continue
     return macro_results
-    # ============================================================
+
+# ============================================================
+# 4b. PREDICTIVE ANALYTICS ENGINE
+# ============================================================
+def compute_technical_score(hist: pd.DataFrame) -> Dict[str, float]:
+    """Score technicals from -100 (very bearish) to +100 (very bullish)"""
+    if hist is None or hist.empty or "close" not in hist.columns:
+        return {"score": 0.0, "details": {}}
+    
+    score = 0.0
+    details = {}
+    last = hist.iloc[-1]
+    
+    # RSI
+    if "rsi" in hist.columns and not pd.isna(last["rsi"]):
+        rsi = last["rsi"]
+        if rsi < 30:
+            rsi_score = 40
+        elif rsi < 40:
+            rsi_score = 20
+        elif rsi > 70:
+            rsi_score = -40
+        elif rsi > 60:
+            rsi_score = -20
+        else:
+            rsi_score = 0
+        score += rsi_score * 0.25
+        details["RSI"] = round(rsi_score, 1)
+    
+    # MACD
+    if "macd" in hist.columns and "macd_signal" in hist.columns:
+        macd = last["macd"]
+        signal = last["macd_signal"]
+        hist_macd = last.get("macd_hist", 0)
+        if macd > signal and hist_macd > 0:
+            macd_score = 30
+        elif macd < signal and hist_macd < 0:
+            macd_score = -30
+        else:
+            macd_score = 0
+        score += macd_score * 0.20
+        details["MACD"] = round(macd_score, 1)
+    
+    # Bollinger %B
+    if all(c in hist.columns for c in ["bb_upper", "bb_lower", "close"]):
+        bb_range = last["bb_upper"] - last["bb_lower"]
+        if bb_range > 0:
+            pct_b = (last["close"] - last["bb_lower"]) / bb_range
+            if pct_b < 0.2:
+                bb_score = 25
+            elif pct_b > 0.8:
+                bb_score = -25
+            else:
+                bb_score = 0
+            score += bb_score * 0.15
+            details["Bollinger %B"] = round(bb_score, 1)
+    
+    # SMA trend
+    if "sma50" in hist.columns and "sma200" in hist.columns:
+        if last["close"] > last["sma50"] > last["sma200"]:
+            sma_score = 30
+        elif last["close"] < last["sma50"] < last["sma200"]:
+            sma_score = -30
+        elif last["close"] > last["sma50"]:
+            sma_score = 10
+        elif last["close"] < last["sma50"]:
+            sma_score = -10
+        else:
+            sma_score = 0
+        score += sma_score * 0.25
+        details["SMA Trend"] = round(sma_score, 1)
+    
+    # Price vs period average
+    period_avg = hist["close"].mean()
+    dist = ((last["close"] / period_avg) - 1) * 100
+    if dist < -8:
+        mean_score = 15
+    elif dist > 12:
+        mean_score = -15
+    else:
+        mean_score = 0
+    score += mean_score * 0.15
+    details["Mean Reversion"] = round(mean_score, 1)
+    
+    return {"score": max(-100, min(100, score)), "details": details}
+
+
+def compute_positioning_score(futures: Dict) -> Dict[str, float]:
+    """Score based on Long/Short + Funding"""
+    score = 0.0
+    details = {}
+    
+    long_pct = futures.get("long_pct", 50.0)
+    funding = futures.get("funding_rate")
+    
+    # Crowded long is bearish (contrarian)
+    if long_pct > 65:
+        pos_score = -30
+    elif long_pct > 55:
+        pos_score = -10
+    elif long_pct < 35:
+        pos_score = 30
+    elif long_pct < 45:
+        pos_score = 10
+    else:
+        pos_score = 0
+    score += pos_score * 0.6
+    details["Long/Short Positioning"] = round(pos_score, 1)
+    
+    # High positive funding = longs paying shorts (often bearish short-term)
+    if funding is not None:
+        if funding > 0.05:
+            fund_score = -25
+        elif funding > 0.02:
+            fund_score = -10
+        elif funding < -0.03:
+            fund_score = 20
+        else:
+            fund_score = 0
+        score += fund_score * 0.4
+        details["Funding Rate"] = round(fund_score, 1)
+    
+    return {"score": max(-100, min(100, score)), "details": details}
+
+
+def compute_sentiment_score(fear_greed_value: str, news_articles: List[Dict]) -> Dict[str, float]:
+    """Combine Fear & Greed + news sentiment"""
+    score = 0.0
+    details = {}
+    
+    # Fear & Greed (0-100)
+    try:
+        fng = float(fear_greed_value)
+        # Extreme fear is often bullish (contrarian)
+        if fng < 20:
+            fng_score = 40
+        elif fng < 35:
+            fng_score = 20
+        elif fng > 80:
+            fng_score = -40
+        elif fng > 65:
+            fng_score = -20
+        else:
+            fng_score = 0
+        score += fng_score * 0.55
+        details["Fear & Greed"] = round(fng_score, 1)
+    except (ValueError, TypeError):
+        details["Fear & Greed"] = 0.0
+    
+    # News sentiment (average VADER)
+    if news_articles:
+        sia = SIA()
+        scores = [sia.polarity_scores(a["title"])["compound"] for a in news_articles]
+        avg_sent = np.mean(scores) if scores else 0.0
+        news_score = avg_sent * 50  # scale -1..1 → -50..50
+        score += news_score * 0.45
+        details["News Sentiment"] = round(news_score, 1)
+    else:
+        details["News Sentiment"] = 0.0
+    
+    return {"score": max(-100, min(100, score)), "details": details}
+
+
+def compute_macro_score(macro_data: Dict[str, pd.DataFrame]) -> Dict[str, float]:
+    """Simple risk-on / risk-off macro bias"""
+    score = 0.0
+    details = {}
+    
+    if not macro_data:
+        return {"score": 0.0, "details": {}}
+    
+    # S&P and Nasdaq positive = risk-on
+    for name in ["S&P 500 Index", "NASDAQ 100 Index"]:
+        if name in macro_data and not macro_data[name].empty:
+            df = macro_data[name]
+            if len(df) > 5:
+                ret = (df["close"].iloc[-1] / df["close"].iloc[-6] - 1) * 100
+                if ret > 2:
+                    score += 15
+                elif ret < -2:
+                    score -= 15
+    
+    # Rising DXY / Yields usually pressure risk assets
+    if "DXY (U.S. Dollar Index)" in macro_data:
+        df = macro_data["DXY (U.S. Dollar Index)"]
+        if len(df) > 5:
+            ret = (df["close"].iloc[-1] / df["close"].iloc[-6] - 1) * 100
+            if ret > 1.5:
+                score -= 20
+                details["DXY Pressure"] = -20
+            elif ret < -1.5:
+                score += 15
+                details["DXY Tail-wind"] = 15
+    
+    if "U.S. 10Y Treasury Yield" in macro_data:
+        df = macro_data["U.S. 10Y Treasury Yield"]
+        if len(df) > 5:
+            ret = (df["close"].iloc[-1] / df["close"].iloc[-6] - 1) * 100
+            if ret > 5:
+                score -= 15
+                details["Yield Rise"] = -15
+    
+    details["Overall Macro"] = round(score, 1)
+    return {"score": max(-100, min(100, score)), "details": details}
+
+
+def generate_prediction(
+    ticker: str,
+    hist: pd.DataFrame,
+    futures: Dict,
+    fear_greed_value: str,
+    news: List[Dict],
+    macro_data: Dict[str, pd.DataFrame],
+) -> Dict[str, Any]:
+    """Full multi-factor prediction package"""
+    tech = compute_technical_score(hist)
+    pos = compute_positioning_score(futures)
+    sent = compute_sentiment_score(fear_greed_value, news)
+    macro = compute_macro_score(macro_data)
+    
+    # Weighted overall score
+    weights = {
+        "Technical": 0.40,
+        "Positioning": 0.25,
+        "Sentiment": 0.25,
+        "Macro": 0.10,
+    }
+    
+    overall = (
+        tech["score"] * weights["Technical"]
+        + pos["score"] * weights["Positioning"]
+        + sent["score"] * weights["Sentiment"]
+        + macro["score"] * weights["Macro"]
+    )
+    
+    # Bias label
+    if overall >= 35:
+        bias = "Strong Bullish"
+        color = "#00FF7F"
+    elif overall >= 15:
+        bias = "Bullish"
+        color = "#90EE90"
+    elif overall <= -35:
+        bias = "Strong Bearish"
+        color = "#FF4500"
+    elif overall <= -15:
+        bias = "Bearish"
+        color = "#FF7F50"
+    else:
+        bias = "Neutral / Mixed"
+        color = "#00FFFF"
+    
+    # Simple volatility-based projected range (next ~5-7 bars)
+    last_close = float(hist["close"].iloc[-1])
+    recent_vol = hist["close"].pct_change().std() * 100  # percent
+    if pd.isna(recent_vol) or recent_vol == 0:
+        recent_vol = 2.5
+    
+    upside = last_close * (1 + (recent_vol * 1.8) / 100)
+    downside = last_close * (1 - (recent_vol * 1.8) / 100)
+    
+    return {
+        "overall_score": round(overall, 1),
+        "bias": bias,
+        "color": color,
+        "components": {
+            "Technical": tech,
+            "Positioning": pos,
+            "Sentiment": sent,
+            "Macro": macro,
+        },
+        "projected_upside": upside,
+        "projected_downside": downside,
+        "current_price": last_close,
+        "recent_volatility_pct": round(recent_vol, 2),
+    }
+
+# ============================================================
 # 5. CHART BUILDING ENGINE
 # ============================================================
 def build_asset_chart(
@@ -710,9 +980,13 @@ with col_title:
 with col_users:
     st.metric("🟢 Active Users", active_users)
 
-st.caption("Dark mode • Candlesticks • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro • 15Y Historical")
+st.caption("Dark mode • Candlesticks • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro • 15Y Historical • Predictive Analytics")
 
-tab_crypto, tab_macro = st.tabs(["⚡ Crypto Intelligence Terminal", "🌐 Global Macro Insights"])
+tab_crypto, tab_macro, tab_predict = st.tabs([
+    "⚡ Crypto Intelligence Terminal",
+    "🌐 Global Macro Insights",
+    "🔮 Predictive Analytics"
+])
 
 with tab_crypto:
     if not tkrs:
@@ -964,5 +1238,159 @@ with tab_macro:
                 font=dict(family="Playfair Display, serif")
             )
             st.plotly_chart(fig_macro, use_container_width=True)
+
+# ============================================================
+# PREDICTIVE ANALYTICS TAB
+# ============================================================
+with tab_predict:
+    st.subheader("🔮 Multi-Factor Predictive Signal Engine")
+    st.caption("Synthesizes Technicals • Futures Positioning • Sentiment • Macro into a single Bias Score. This is a decision-support tool, not financial advice.")
+    
+    if not tkrs:
+        st.info("Enter at least one ticker in the sidebar to generate predictions.")
+    else:
+        # Re-use already loaded data where possible
+        pred_data = load_ticker_data(tuple(tkrs), interval, lookback_bars, period, is_6h)
+        fng_v, fng_c = get_fear_greed()
+        news = get_crypto_news(cache_buster=pd.Timestamp.now().strftime('%Y-%m-%d %H:%M'))
+        macro_data = load_macro_data()
+        
+        if not pred_data:
+            st.error("Unable to load market data for prediction.")
+        else:
+            pred_ticker = st.selectbox("Select asset for prediction:", list(pred_data.keys()), key="pred_select")
+            
+            if pred_ticker and pred_ticker in pred_data:
+                hist = pred_data[pred_ticker]
+                c_px = float(hist["close"].iloc[-1])
+                futures = get_futures_metrics(pred_ticker, current_price=c_px)
+                
+                prediction = generate_prediction(
+                    ticker=pred_ticker,
+                    hist=hist,
+                    futures=futures,
+                    fear_greed_value=fng_v,
+                    news=news,
+                    macro_data=macro_data,
+                )
+                
+                # === HEADER SCORE CARD ===
+                st.markdown("### Overall Market Bias")
+                score_col1, score_col2, score_col3 = st.columns([1.5, 1, 1])
+                
+                with score_col1:
+                    st.markdown(
+                        f"""
+                        <div style="background: linear-gradient(135deg, #1a1d24 0%, #0e1117 100%);
+                                    border: 2px solid {prediction['color']};
+                                    border-radius: 12px; padding: 20px; text-align: center;">
+                            <div style="font-size: 0.9rem; color: #a0a0a0;">Bias Score</div>
+                            <div style="font-size: 3.2rem; font-weight: 700; color: {prediction['color']};">
+                                {prediction['overall_score']:+.1f}
+                            </div>
+                            <div style="font-size: 1.4rem; font-weight: 600; color: {prediction['color']};">
+                                {prediction['bias']}
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                
+                with score_col2:
+                    st.metric("Current Price", f"${prediction['current_price']:,.2f}")
+                    st.metric("Recent Volatility", f"{prediction['recent_volatility_pct']:.2f}%")
+                
+                with score_col3:
+                    st.metric("Projected Upside", f"${prediction['projected_upside']:,.2f}")
+                    st.metric("Projected Downside", f"${prediction['projected_downside']:,.2f}")
+                
+                st.markdown("---")
+                
+                # === COMPONENT BREAKDOWN ===
+                st.markdown("### Factor Breakdown")
+                
+                comp_cols = st.columns(4)
+                component_names = ["Technical", "Positioning", "Sentiment", "Macro"]
+                component_icons = ["📈", "⚖️", "📰", "🌐"]
+                
+                for i, name in enumerate(component_names):
+                    comp = prediction["components"][name]
+                    with comp_cols[i]:
+                        color = "#00FF7F" if comp["score"] > 10 else "#FF4500" if comp["score"] < -10 else "#00FFFF"
+                        st.markdown(
+                            f"""
+                            <div style="background:#1a1d24; border-radius:8px; padding:14px; text-align:center; border:1px solid #3b4252;">
+                                <div style="font-size:1.5rem;">{component_icons[i]}</div>
+                                <div style="font-size:0.85rem; color:#a0a0a0;">{name}</div>
+                                <div style="font-size:1.8rem; font-weight:700; color:{color};">{comp['score']:+.1f}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                
+                # Detailed sub-scores
+                st.markdown("#### Detailed Signal Contributions")
+                detail_rows = []
+                for name in component_names:
+                    for k, v in prediction["components"][name]["details"].items():
+                        detail_rows.append({
+                            "Factor Group": name,
+                            "Signal": k,
+                            "Contribution": f"{v:+.1f}"
+                        })
+                
+                if detail_rows:
+                    st.dataframe(
+                        pd.DataFrame(detail_rows),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                
+                # === VISUAL SCORE BAR ===
+                st.markdown("### Score Visualization")
+                fig_score = go.Figure()
+                
+                fig_score.add_trace(go.Bar(
+                    x=["Technical", "Positioning", "Sentiment", "Macro", "OVERALL"],
+                    y=[
+                        prediction["components"]["Technical"]["score"],
+                        prediction["components"]["Positioning"]["score"],
+                        prediction["components"]["Sentiment"]["score"],
+                        prediction["components"]["Macro"]["score"],
+                        prediction["overall_score"],
+                    ],
+                    marker_color=[
+                        "#00BFFF", "#FFD700", "#FF69B4", "#90EE90", prediction["color"]
+                    ],
+                    text=[
+                        f"{prediction['components']['Technical']['score']:+.1f}",
+                        f"{prediction['components']['Positioning']['score']:+.1f}",
+                        f"{prediction['components']['Sentiment']['score']:+.1f}",
+                        f"{prediction['components']['Macro']['score']:+.1f}",
+                        f"{prediction['overall_score']:+.1f}",
+                    ],
+                    textposition="auto",
+                ))
+                
+                fig_score.update_layout(
+                    height=340,
+                    template="plotly_dark",
+                    paper_bgcolor="#0e1117",
+                    plot_bgcolor="#0e1117",
+                    yaxis_title="Score (-100 to +100)",
+                    yaxis=dict(range=[-100, 100]),
+                    font=dict(family="Playfair Display, serif"),
+                    margin=dict(l=10, r=10, t=30, b=10),
+                )
+                fig_score.add_hline(y=0, line_dash="dash", line_color="gray")
+                st.plotly_chart(fig_score, use_container_width=True)
+                
+                # Disclaimer
+                st.info(
+                    "⚠️ **Disclaimer**: This Predictive Signal Engine aggregates existing technical, positioning, "
+                    "sentiment, and macro data already present in the app. It is a decision-support tool only and "
+                    "does **not** constitute financial, investment, or trading advice. Markets can remain irrational "
+                    "longer than models can stay solvent. Always do your own research."
+                )
 
 st.sidebar.success(f"Last refresh: {pd.Timestamp.now().strftime('%H:%M:%S')}")
