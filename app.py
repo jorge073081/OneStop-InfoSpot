@@ -1026,6 +1026,167 @@ def generate_prediction(
         "recent_volatility_pct": round(recent_vol, 2),
     }
 
+
+# ============================================================
+# 4c. FREE DATA-AWARE AI ASSISTANT (No API, No Local Model)
+# ============================================================
+def build_app_context(
+    tickers: list,
+    data: Dict[str, pd.DataFrame],
+    liquidity_profiles: Dict,
+    futures_table_rows: list,
+    detected_patterns: list,
+    prediction: Optional[Dict] = None,
+    fear_greed: Tuple[str, str] = ("N/A", "N/A"),
+    news: list = None,
+) -> str:
+    """Build a compact text snapshot of current app state for the assistant."""
+    lines = []
+    lines.append("=== CURRENT APP STATE ===")
+    lines.append(f"Active Tickers: {', '.join(tickers) if tickers else 'None'}")
+    
+    if data:
+        lines.append("\n--- Price & Technical Snapshot ---")
+        for t, hist in data.items():
+            if hist.empty or "close" not in hist.columns:
+                continue
+            last = hist.iloc[-1]
+            price = float(last["close"])
+            change = 0.0
+            if len(hist) > 1:
+                prev = float(hist["close"].iloc[-2])
+                change = ((price - prev) / prev) * 100
+            rsi = last.get("rsi", None)
+            rsi_str = f"{rsi:.1f}" if rsi is not None and not pd.isna(rsi) else "N/A"
+            lines.append(f"{t}: ${price:,.2f} ({change:+.2f}%) | RSI={rsi_str}")
+    
+    if liquidity_profiles:
+        lines.append("\n--- Futures Positioning ---")
+        for t, p in liquidity_profiles.items():
+            lines.append(f"{t}: Long {p.get('longs', 50):.1f}% / Short {p.get('shorts', 50):.1f}% | Funding: {p.get('funding')}")
+    
+    if detected_patterns:
+        lines.append("\n--- Detected Patterns ---")
+        for p in detected_patterns[:8]:
+            lines.append(f"- {p['type']} ({p['direction']}) @ {p['price']:.2f} — {p['description']}")
+    
+    if prediction:
+        lines.append("\n--- Predictive Bias ---")
+        lines.append(f"Overall Score: {prediction['overall_score']:+.1f} → {prediction['bias']}")
+        for name, comp in prediction["components"].items():
+            lines.append(f"  {name}: {comp['score']:+.1f}")
+    
+    fng_v, fng_c = fear_greed
+    lines.append(f"\n--- Sentiment ---")
+    lines.append(f"Fear & Greed: {fng_v}/100 ({fng_c})")
+    
+    if news:
+        lines.append("\n--- Latest News Headlines ---")
+        for art in news[:5]:
+            lines.append(f"- [{art['source']}] {art['title']}")
+    
+    return "\n".join(lines)
+
+
+def simple_ai_reply(user_msg: str, context: str, tickers: list) -> str:
+    """
+    Zero-cost, data-aware assistant.
+    Uses keyword matching + the live app context to answer questions.
+    No external API calls.
+    """
+    msg = user_msg.lower().strip()
+    
+    # Greeting / help
+    if any(w in msg for w in ["hello", "hi ", "hey", "help", "what can you do"]):
+        return (
+            "👋 Hi! I'm your free data assistant for OneStop-InfoSpot.\n\n"
+            "I can help you with:\n"
+            "• Current prices & technicals (RSI, MACD, etc.)\n"
+            "• Futures positioning (Long/Short %, Funding)\n"
+            "• Detected chart patterns\n"
+            "• Predictive bias scores\n"
+            "• Fear & Greed and news sentiment\n\n"
+            "Try asking:\n"
+            "- What's the bias on BTC?\n"
+            "- Any bullish patterns right now?\n"
+            "- How is funding looking?\n"
+            "- Summarize the current market"
+        )
+    
+    # Summarize / overview
+    if any(w in msg for w in ["summarize", "summary", "overview", "what's going on", "market overview"]):
+        return f"Here's a snapshot of the current state based on live app data:\n\n{context}"
+    
+    # Predictive / bias questions
+    if any(w in msg for w in ["bias", "predict", "prediction", "bullish", "bearish", "outlook"]):
+        if "Overall Score:" in context:
+            # Extract the prediction part
+            start = context.find("--- Predictive Bias ---")
+            end = context.find("--- Sentiment ---")
+            if start != -1:
+                pred_section = context[start:end] if end != -1 else context[start:]
+                return f"Based on the multi-factor model:\n\n{pred_section.strip()}"
+        return "I don't have a fresh predictive score loaded right now. Open the 🔮 Predictive Analytics tab first, then ask again."
+    
+    # Patterns
+    if any(w in msg for w in ["pattern", "patterns", "chart pattern", "double top", "double bottom", "hammer", "engulfing", "doji"]):
+        if "--- Detected Patterns ---" in context:
+            start = context.find("--- Detected Patterns ---")
+            end = context.find("--- Predictive Bias ---")
+            section = context[start:end] if end != -1 else context[start:]
+            return f"Here are the patterns currently detected:\n\n{section.strip()}"
+        return "No significant chart patterns are currently detected (or Pattern Recognition is turned off). Enable it in the sidebar and select an asset."
+    
+    # Funding / positioning
+    if any(w in msg for w in ["funding", "long short", "long/short", "positioning", "open interest", "oi"]):
+        if "--- Futures Positioning ---" in context:
+            start = context.find("--- Futures Positioning ---")
+            end = context.find("--- Detected Patterns ---")
+            if end == -1:
+                end = context.find("--- Predictive Bias ---")
+            section = context[start:end] if end != -1 else context[start:]
+            return f"Current futures positioning from the app:\n\n{section.strip()}"
+        return "Futures data is not loaded yet."
+    
+    # Fear & Greed / sentiment
+    if any(w in msg for w in ["fear", "greed", "sentiment", "news"]):
+        if "Fear & Greed:" in context:
+            start = context.find("--- Sentiment ---")
+            return f"Current sentiment snapshot:\n\n{context[start:].strip()}"
+        return "Sentiment data not available at the moment."
+    
+    # Price / technical questions
+    if any(w in msg for w in ["price", "rsi", "macd", "technical", "how is", "what is"]):
+        # Try to find specific ticker
+        for t in tickers:
+            t_clean = t.replace("-USD", "").lower()
+            if t_clean in msg or t.lower() in msg:
+                if "--- Price & Technical Snapshot ---" in context:
+                    # Return the whole price section (simple but effective)
+                    start = context.find("--- Price & Technical Snapshot ---")
+                    end = context.find("--- Futures Positioning ---")
+                    section = context[start:end] if end != -1 else context[start:]
+                    return f"Here's the latest technical snapshot:\n\n{section.strip()}"
+        # General
+        if "--- Price & Technical Snapshot ---" in context:
+            start = context.find("--- Price & Technical Snapshot ---")
+            end = context.find("--- Futures Positioning ---")
+            section = context[start:end] if end != -1 else context[start:]
+            return f"Current prices & key technicals:\n\n{section.strip()}"
+    
+    # Fallback
+    return (
+        "I can answer questions using the live data currently loaded in the app.\n\n"
+        "Try asking about:\n"
+        "• Prices / RSI / technicals\n"
+        "• Chart patterns\n"
+        "• Predictive bias\n"
+        "• Funding rates & long/short positioning\n"
+        "• Fear & Greed or news sentiment\n"
+        "• Or just say **summarize** for a full snapshot.\n\n"
+        f"Currently tracking: {', '.join(tickers) if tickers else 'No tickers loaded'}"
+    )
+
 # ============================================================
 # 5. CHART BUILDING ENGINE
 # ============================================================
@@ -1218,10 +1379,11 @@ with col_users:
 
 st.caption("Dark mode • Candlesticks • Pattern Recognition • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro • 15Y Historical • Predictive Analytics")
 
-tab_crypto, tab_macro, tab_predict = st.tabs([
+tab_crypto, tab_macro, tab_predict, tab_chat = st.tabs([
     "⚡ Crypto Intelligence Terminal",
     "🌐 Global Macro Insights",
-    "🔮 Predictive Analytics"
+    "🔮 Predictive Analytics",
+    "💬 AI Assistant"
 ])
 
 with tab_crypto:
@@ -1648,5 +1810,93 @@ with tab_predict:
                     "does **not** constitute financial, investment, or trading advice. Markets can remain irrational "
                     "longer than models can stay solvent. Always do your own research."
                 )
+
+# ============================================================
+# AI ASSISTANT TAB (Free, zero API cost)
+# ============================================================
+with tab_chat:
+    st.subheader("💬 Free Data-Aware AI Assistant")
+    st.caption("Answers questions using only the live data currently loaded in the app. No external API calls • Completely free.")
+
+    # Initialize chat history
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = [
+            {"role": "assistant", "content": "Hi! I can help you understand the current market data loaded in the app. Ask me about prices, patterns, bias scores, funding rates, or just say **summarize**."}
+        ]
+
+    # Display chat history
+    for msg in st.session_state.chat_messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    # Chat input
+    if prompt := st.chat_input("Ask about the current data..."):
+        # Add user message
+        st.session_state.chat_messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        # Build live context from whatever is available
+        # We re-fetch lightly so the assistant always has fresh context
+        try:
+            live_data = load_ticker_data(tuple(tkrs), interval, lookback_bars, period, is_6h) if tkrs else {}
+        except Exception:
+            live_data = {}
+
+        live_patterns = []
+        live_prediction = None
+        live_liquidity = {}
+        live_news = []
+        fng = ("N/A", "N/A")
+
+        if live_data and tkrs:
+            # Patterns for the first ticker as example
+            first_t = list(live_data.keys())[0]
+            if show_patterns:
+                live_patterns = detect_all_patterns(live_data[first_t])
+
+            # Quick futures
+            for t, hist in live_data.items():
+                if not hist.empty and "close" in hist.columns:
+                    cpx = float(hist["close"].iloc[-1])
+                    fut = get_futures_metrics(t, current_price=cpx)
+                    live_liquidity[t] = {
+                        "longs": fut.get("long_pct", 50),
+                        "shorts": fut.get("short_pct", 50),
+                        "funding": fut.get("funding_rate"),
+                    }
+
+            # Prediction for first ticker
+            try:
+                fng = get_fear_greed()
+                live_news = get_crypto_news(cache_buster=str(pd.Timestamp.now()))
+                macro = load_macro_data()
+                hist0 = live_data[first_t]
+                cpx0 = float(hist0["close"].iloc[-1])
+                fut0 = get_futures_metrics(first_t, current_price=cpx0)
+                live_prediction = generate_prediction(
+                    first_t, hist0, fut0, fng[0], live_news, macro
+                )
+            except Exception:
+                pass
+
+        context = build_app_context(
+            tickers=tkrs,
+            data=live_data,
+            liquidity_profiles=live_liquidity,
+            futures_table_rows=[],
+            detected_patterns=live_patterns,
+            prediction=live_prediction,
+            fear_greed=fng,
+            news=live_news,
+        )
+
+        # Generate reply
+        reply = simple_ai_reply(prompt, context, tkrs)
+
+        st.session_state.chat_messages.append({"role": "assistant", "content": reply})
+        with st.chat_message("assistant"):
+            st.markdown(reply)
+
 
 st.sidebar.success(f"Last refresh: {pd.Timestamp.now().strftime('%H:%M:%S')}")
