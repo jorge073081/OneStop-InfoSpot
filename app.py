@@ -416,7 +416,7 @@ def run_rsi_backtest(df: pd.DataFrame, low=30, high=70):
     data["signal"] = 0
     data.loc[data["rsi"] < low, "signal"] = 1   # buy
     data.loc[data["rsi"] > high, "signal"] = -1  # sell
-    data["position"] = data["signal"].replace(to_replace=0, method="ffill").fillna(0)
+    data["position"] = data["signal"].replace(0, pd.NA).ffill().fillna(0)
     data["returns"] = data["close"].pct_change()
     data["strategy"] = data["position"].shift(1) * data["returns"]
     data["equity"] = (1 + data["strategy"].fillna(0)).cumprod()
@@ -445,7 +445,7 @@ def run_sma_cross_backtest(df: pd.DataFrame):
     data["signal"] = 0
     data.loc[data["sma50"] > data["sma200"], "signal"] = 1
     data.loc[data["sma50"] < data["sma200"], "signal"] = -1
-    data["position"] = data["signal"].replace(to_replace=0, method="ffill").fillna(0)
+    data["position"] = data["signal"].replace(0, pd.NA).ffill().fillna(0)
     data["returns"] = data["close"].pct_change()
     data["strategy"] = data["position"].shift(1) * data["returns"]
     data["equity"] = (1 + data["strategy"].fillna(0)).cumprod()
