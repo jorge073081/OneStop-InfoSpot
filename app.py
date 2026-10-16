@@ -1088,104 +1088,235 @@ def build_app_context(
     return "\n".join(lines)
 
 
+
 def simple_ai_reply(user_msg: str, context: str, tickers: list) -> str:
     """
-    Zero-cost, data-aware assistant.
-    Uses keyword matching + the live app context to answer questions.
-    No external API calls.
+    Expanded zero-cost, data-aware assistant.
+    - Uses live app data when available
+    - Answers a wide range of general crypto / trading questions with built-in knowledge
+    - No external API, no local model, no API key
     """
     msg = user_msg.lower().strip()
     
-    # Greeting / help
-    if any(w in msg for w in ["hello", "hi ", "hey", "help", "what can you do"]):
+    # ---------- GREETINGS / HELP ----------
+    if any(w in msg for w in ["hello", "hi ", "hey", "help", "what can you do", "who are you"]):
         return (
-            "👋 Hi! I'm your free data assistant for OneStop-InfoSpot.\n\n"
-            "I can help you with:\n"
-            "• Current prices & technicals (RSI, MACD, etc.)\n"
-            "• Futures positioning (Long/Short %, Funding)\n"
-            "• Detected chart patterns\n"
-            "• Predictive bias scores\n"
-            "• Fear & Greed and news sentiment\n\n"
-            "Try asking:\n"
-            "- What's the bias on BTC?\n"
-            "- Any bullish patterns right now?\n"
-            "- How is funding looking?\n"
-            "- Summarize the current market"
+            "👋 Hi! I'm your free built-in assistant for **OneStop-InfoSpot**.\n\n"
+            "I can help with:\n"
+            "• Live data from the app (prices, RSI, patterns, bias scores, funding, Fear & Greed)\n"
+            "• General crypto explanations (what is funding rate, RSI, etc.)\n"
+            "• Trading concepts and pattern meanings\n"
+            "• Quick summaries of the current market state\n\n"
+            "**Try asking:**\n"
+            "- summarize\n"
+            "- what's the bias on BTC?\n"
+            "- any bullish patterns?\n"
+            "- what is a funding rate?\n"
+            "- explain RSI\n"
+            "- what does a hammer candle mean?"
         )
-    
-    # Summarize / overview
-    if any(w in msg for w in ["summarize", "summary", "overview", "what's going on", "market overview"]):
-        return f"Here's a snapshot of the current state based on live app data:\n\n{context}"
-    
-    # Predictive / bias questions
-    if any(w in msg for w in ["bias", "predict", "prediction", "bullish", "bearish", "outlook"]):
-        if "Overall Score:" in context:
-            # Extract the prediction part
+
+    # ---------- SUMMARIZE / OVERVIEW ----------
+    if any(w in msg for w in ["summarize", "summary", "overview", "what's going on", "market overview", "current state"]):
+        return f"📊 **Live App Snapshot**\n\n{context}"
+
+    # ---------- PREDICTIVE BIAS ----------
+    if any(w in msg for w in ["bias", "predict", "prediction", "outlook", "bullish or bearish"]):
+        if "Overall Score:" in context or "--- Predictive Bias ---" in context:
             start = context.find("--- Predictive Bias ---")
             end = context.find("--- Sentiment ---")
-            if start != -1:
-                pred_section = context[start:end] if end != -1 else context[start:]
-                return f"Based on the multi-factor model:\n\n{pred_section.strip()}"
-        return "I don't have a fresh predictive score loaded right now. Open the 🔮 Predictive Analytics tab first, then ask again."
-    
-    # Patterns
-    if any(w in msg for w in ["pattern", "patterns", "chart pattern", "double top", "double bottom", "hammer", "engulfing", "doji"]):
+            section = context[start:end].strip() if start != -1 else "Prediction data not fully loaded."
+            return f"🔮 **Current Predictive Bias**\n\n{section}"
+        return "Open the **🔮 Predictive Analytics** tab first so I can read the latest multi-factor score, then ask me again."
+
+    # ---------- PATTERNS ----------
+    if any(w in msg for w in ["pattern", "patterns", "chart pattern", "double top", "double bottom", "hammer", "engulfing", "doji", "shooting star"]):
         if "--- Detected Patterns ---" in context:
             start = context.find("--- Detected Patterns ---")
             end = context.find("--- Predictive Bias ---")
-            section = context[start:end] if end != -1 else context[start:]
-            return f"Here are the patterns currently detected:\n\n{section.strip()}"
-        return "No significant chart patterns are currently detected (or Pattern Recognition is turned off). Enable it in the sidebar and select an asset."
-    
-    # Funding / positioning
-    if any(w in msg for w in ["funding", "long short", "long/short", "positioning", "open interest", "oi"]):
+            section = context[start:end].strip() if end != -1 else context[start:].strip()
+            return f"🔎 **Detected Patterns**\n\n{section}"
+        return (
+            "No significant patterns are currently detected (or Pattern Recognition is turned off).\n\n"
+            "Enable **Chart Pattern Recognition** in the sidebar, select an asset, and ask me again.\n\n"
+            "I can also explain what common patterns mean — just ask e.g. *what does a hammer mean?*"
+        )
+
+    # ---------- FUNDING / POSITIONING ----------
+    if any(w in msg for w in ["funding", "long short", "long/short", "positioning", "open interest", "oi ", "longs", "shorts"]):
         if "--- Futures Positioning ---" in context:
             start = context.find("--- Futures Positioning ---")
             end = context.find("--- Detected Patterns ---")
             if end == -1:
                 end = context.find("--- Predictive Bias ---")
-            section = context[start:end] if end != -1 else context[start:]
-            return f"Current futures positioning from the app:\n\n{section.strip()}"
-        return "Futures data is not loaded yet."
-    
-    # Fear & Greed / sentiment
-    if any(w in msg for w in ["fear", "greed", "sentiment", "news"]):
+            section = context[start:end].strip() if end != -1 else context[start:].strip()
+            return f"⚖️ **Futures Positioning**\n\n{section}"
+        return "Futures positioning data is not loaded yet. Make sure you have tickers selected."
+
+    # ---------- FEAR & GREED / SENTIMENT / NEWS ----------
+    if any(w in msg for w in ["fear", "greed", "sentiment", "news", "fng"]):
         if "Fear & Greed:" in context:
             start = context.find("--- Sentiment ---")
-            return f"Current sentiment snapshot:\n\n{context[start:].strip()}"
+            return f"📰 **Sentiment Snapshot**\n\n{context[start:].strip()}"
         return "Sentiment data not available at the moment."
-    
-    # Price / technical questions
-    if any(w in msg for w in ["price", "rsi", "macd", "technical", "how is", "what is"]):
-        # Try to find specific ticker
-        for t in tickers:
-            t_clean = t.replace("-USD", "").lower()
-            if t_clean in msg or t.lower() in msg:
-                if "--- Price & Technical Snapshot ---" in context:
-                    # Return the whole price section (simple but effective)
-                    start = context.find("--- Price & Technical Snapshot ---")
-                    end = context.find("--- Futures Positioning ---")
-                    section = context[start:end] if end != -1 else context[start:]
-                    return f"Here's the latest technical snapshot:\n\n{section.strip()}"
-        # General
+
+    # ---------- PRICE / TECHNICALS ----------
+    if any(w in msg for w in ["price", "rsi", "macd", "technical", "how is", "what is the price"]):
         if "--- Price & Technical Snapshot ---" in context:
             start = context.find("--- Price & Technical Snapshot ---")
             end = context.find("--- Futures Positioning ---")
-            section = context[start:end] if end != -1 else context[start:]
-            return f"Current prices & key technicals:\n\n{section.strip()}"
-    
-    # Fallback
+            section = context[start:end].strip() if end != -1 else context[start:].strip()
+            return f"📈 **Price & Technical Snapshot**\n\n{section}"
+        return "Price data is not loaded yet. Enter tickers in the sidebar first."
+
+    # =====================================================
+    # GENERAL KNOWLEDGE (zero-API built-in explanations)
+    # =====================================================
+
+    # RSI
+    if "rsi" in msg and any(w in msg for w in ["what is", "explain", "mean", "how does", "definition"]):
+        return (
+            "**RSI (Relative Strength Index)** is a momentum oscillator that measures the speed and magnitude of recent price changes.\n\n"
+            "- Range: 0 to 100\n"
+            "- Above 70 → traditionally **overbought** (possible pullback)\n"
+            "- Below 30 → traditionally **oversold** (possible bounce)\n"
+            "- It works best when combined with trend and support/resistance.\n\n"
+            "You can see the live RSI for your selected assets in the main chart and metrics."
+        )
+
+    # MACD
+    if "macd" in msg and any(w in msg for w in ["what is", "explain", "mean", "how does"]):
+        return (
+            "**MACD (Moving Average Convergence Divergence)** shows the relationship between two moving averages of price.\n\n"
+            "- MACD Line = 12-period EMA − 26-period EMA\n"
+            "- Signal Line = 9-period EMA of the MACD Line\n"
+            "- Histogram = MACD Line − Signal Line\n\n"
+            "**Common signals:**\n"
+            "- MACD crosses above Signal → potential bullish momentum\n"
+            "- MACD crosses below Signal → potential bearish momentum\n"
+            "- Histogram growing = momentum strengthening"
+        )
+
+    # Funding Rate
+    if "funding" in msg and any(w in msg for w in ["what is", "explain", "mean", "how does"]):
+        return (
+            "**Funding Rate** is a periodic payment exchanged between long and short traders in perpetual futures markets.\n\n"
+            "- Positive funding → Longs pay Shorts (market is bullish / crowded long)\n"
+            "- Negative funding → Shorts pay Longs (market is bearish / crowded short)\n\n"
+            "Extremely high positive funding can sometimes signal an overcrowded long trade and raise the chance of a long squeeze. "
+            "The app shows live funding from OKX for your selected tickers."
+        )
+
+    # Long / Short Ratio
+    if any(w in msg for w in ["long short ratio", "long/short", "longs vs shorts"]) and any(w in msg for w in ["what", "explain", "mean"]):
+        return (
+            "The **Long/Short Account Ratio** shows what percentage of traders are currently long vs short on a perpetual contract.\n\n"
+            "- High Long % (e.g. > 65%) can indicate a crowded long trade\n"
+            "- High Short % can indicate crowded shorts\n\n"
+            "It is a **contrarian** indicator for many traders — extreme readings often precede squeezes. "
+            "You can see the live ratios in the Futures Metrics section of the app."
+        )
+
+    # Candlestick patterns explanations
+    if "doji" in msg and any(w in msg for w in ["what", "mean", "explain"]):
+        return (
+            "A **Doji** is a candlestick where the open and close are almost equal, creating a very small body.\n\n"
+            "It signals **indecision** between buyers and sellers. After a strong trend, a Doji can warn that the trend may be losing strength and a reversal or consolidation could follow."
+        )
+
+    if "hammer" in msg and any(w in msg for w in ["what", "mean", "explain"]):
+        return (
+            "A **Hammer** is a bullish reversal candlestick that appears after a decline.\n\n"
+            "It has a small body at the top and a long lower wick (at least 2× the body). "
+            "It shows that sellers pushed the price down, but buyers stepped in strongly and closed the price back up near the open — a sign of potential buying pressure."
+        )
+
+    if "shooting star" in msg and any(w in msg for w in ["what", "mean", "explain"]):
+        return (
+            "A **Shooting Star** is a bearish reversal candlestick that appears after an advance.\n\n"
+            "It has a small body at the bottom and a long upper wick. "
+            "It shows that buyers pushed the price up, but sellers took control and closed the price back down near the open — a warning of potential selling pressure."
+        )
+
+    if "engulfing" in msg and any(w in msg for w in ["what", "mean", "explain"]):
+        return (
+            "**Engulfing patterns** are two-candle reversal signals:\n\n"
+            "- **Bullish Engulfing**: A green candle whose body completely covers the previous red candle’s body → potential bullish reversal\n"
+            "- **Bearish Engulfing**: A red candle whose body completely covers the previous green candle’s body → potential bearish reversal\n\n"
+            "They are stronger when they appear at support/resistance or after a clear trend."
+        )
+
+    if "double top" in msg and any(w in msg for w in ["what", "mean", "explain"]):
+        return (
+            "A **Double Top** is a bearish reversal pattern that looks like the letter “M”.\n\n"
+            "Price makes two peaks at roughly the same level, separated by a pullback. "
+            "A break below the low between the two peaks is often seen as confirmation that sellers are in control."
+        )
+
+    if "double bottom" in msg and any(w in msg for w in ["what", "mean", "explain"]):
+        return (
+            "A **Double Bottom** is a bullish reversal pattern that looks like the letter “W”.\n\n"
+            "Price makes two troughs at roughly the same level. "
+            "A break above the high between the two troughs is often seen as confirmation that buyers are taking control."
+        )
+
+    # Support / Resistance
+    if any(w in msg for w in ["support", "resistance"]) and any(w in msg for w in ["what is", "explain", "mean"]):
+        return (
+            "**Support** is a price level where buying interest is historically strong enough to pause or reverse a decline.\n"
+            "**Resistance** is a price level where selling interest is historically strong enough to pause or reverse an advance.\n\n"
+            "These levels are not exact — they are zones. The app marks recent local support and resistance when Pattern Recognition is enabled."
+        )
+
+    # Bollinger Bands
+    if "bollinger" in msg and any(w in msg for w in ["what", "explain", "mean"]):
+        return (
+            "**Bollinger Bands** consist of:\n"
+            "- A middle band (usually 20-period SMA)\n"
+            "- An upper band (SMA + 2 standard deviations)\n"
+            "- A lower band (SMA − 2 standard deviations)\n\n"
+            "Price tends to bounce between the bands. Touches of the lower band can signal oversold conditions in a range, while touches of the upper band can signal overbought conditions. "
+            "Band width also expands in high volatility and contracts in low volatility (the 'squeeze')."
+        )
+
+    # SMA
+    if any(w in msg for w in ["sma", "moving average", "50 sma", "200 sma"]) and any(w in msg for w in ["what", "explain", "mean"]):
+        return (
+            "A **Simple Moving Average (SMA)** is the average closing price over a set number of periods.\n\n"
+            "- **50 SMA** → medium-term trend filter\n"
+            "- **200 SMA** → long-term trend filter\n\n"
+            "Common interpretations:\n"
+            "- Price above rising 50 & 200 SMA → bullish trend structure\n"
+            "- Price below falling 50 & 200 SMA → bearish trend structure\n"
+            "- 50 SMA crossing above 200 SMA is often called a 'Golden Cross'"
+        )
+
+    # Perpetual futures
+    if any(w in msg for w in ["perpetual", "perp", "perpetuals"]) and any(w in msg for w in ["what", "explain"]):
+        return (
+            "**Perpetual futures** (perps) are derivative contracts with no expiry date. "
+            "They use a funding rate mechanism to keep the contract price anchored close to the spot price.\n\n"
+            "This is why the app tracks funding rates and long/short ratios — they give insight into how crowded the perpetual market is."
+        )
+
+    # General fallback with guidance
     return (
-        "I can answer questions using the live data currently loaded in the app.\n\n"
-        "Try asking about:\n"
-        "• Prices / RSI / technicals\n"
-        "• Chart patterns\n"
-        "• Predictive bias\n"
-        "• Funding rates & long/short positioning\n"
-        "• Fear & Greed or news sentiment\n"
-        "• Or just say **summarize** for a full snapshot.\n\n"
-        f"Currently tracking: {', '.join(tickers) if tickers else 'No tickers loaded'}"
+        "I can help with both **live app data** and **general crypto/trading concepts**.\n\n"
+        "**Live data examples:**\n"
+        "- summarize\n"
+        "- what's the bias?\n"
+        "- any patterns?\n"
+        "- how is funding?\n"
+        "- show RSI / prices\n\n"
+        "**General knowledge examples:**\n"
+        "- what is RSI?\n"
+        "- explain funding rate\n"
+        "- what does a hammer candle mean?\n"
+        "- what is a double bottom?\n"
+        "- explain bollinger bands\n\n"
+        f"Currently tracking: **{', '.join(tickers) if tickers else 'No tickers loaded'}**"
     )
+
 
 # ============================================================
 # 5. CHART BUILDING ENGINE
