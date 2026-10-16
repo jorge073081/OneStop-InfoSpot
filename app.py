@@ -1089,40 +1089,76 @@ def build_app_context(
 
 
 
-def simple_ai_reply(user_msg: str, context: str, tickers: list) -> str:
+
+def simple_ai_reply(user_msg: str, context: str, tickers: list, taught: dict) -> str:
     """
-    Expanded zero-cost, data-aware assistant.
-    - Uses live app data when available
-    - Answers a wide range of general crypto / trading questions with built-in knowledge
-    - No external API, no local model, no API key
+    Zero-API teachable assistant.
+    Priority order:
+    1. Live app data
+    2. User-taught knowledge
+    3. Built-in knowledge
+    4. Helpful fallback
     """
     msg = user_msg.lower().strip()
-    
+    original_msg = user_msg.strip()
+
+    # ---------- TEACH COMMANDS ----------
+    # Users can say: "remember that X is Y" or "teach: question -> answer"
+    if msg.startswith("remember that ") or msg.startswith("teach:") or msg.startswith("learn:"):
+        try:
+            if msg.startswith("remember that "):
+                payload = original_msg[len("remember that "):].strip()
+            else:
+                payload = original_msg.split(":", 1)[1].strip()
+
+            if "->" in payload:
+                question, answer = [p.strip() for p in payload.split("->", 1)]
+            elif " is " in payload.lower():
+                # simple "remember that RSI is ..."
+                parts = payload.split(" is ", 1)
+                question = parts[0].strip()
+                answer = parts[1].strip()
+            else:
+                return "To teach me, use one of these formats:\n\n- `remember that RSI is a momentum indicator`\n- `teach: what is funding rate? -> Funding rate is ...`"
+
+            if question and answer:
+                # store under lowercase key for matching
+                taught[question.lower()] = answer
+                return f"✅ Got it! I learned:\n\n**Q:** {question}\n**A:** {answer}\n\nI’ll remember this for the rest of the session (and across sessions if saving is enabled)."
+        except Exception:
+            return "Sorry, I couldn’t understand the teaching format. Try:\n`teach: your question -> your answer`"
+
+    # ---------- CHECK TAUGHT KNOWLEDGE FIRST ----------
+    for key, answer in taught.items():
+        if key in msg or msg in key:
+            return f"📚 (From what you taught me)\n\n{answer}"
+
     # ---------- GREETINGS / HELP ----------
     if any(w in msg for w in ["hello", "hi ", "hey", "help", "what can you do", "who are you"]):
         return (
-            "👋 Hi! I'm your free built-in assistant for **OneStop-InfoSpot**.\n\n"
-            "I can help with:\n"
-            "• Live data from the app (prices, RSI, patterns, bias scores, funding, Fear & Greed)\n"
-            "• General crypto explanations (what is funding rate, RSI, etc.)\n"
-            "• Trading concepts and pattern meanings\n"
-            "• Quick summaries of the current market state\n\n"
+            "👋 Hi! I’m your free built-in assistant for **OneStop-InfoSpot**.\n\n"
+            "I can:\n"
+            "• Answer using live app data (prices, patterns, bias, funding, Fear & Greed)\n"
+            "• Explain common crypto & trading concepts\n"
+            "• **Learn** new things you teach me\n\n"
+            "**Teach me** with:\n"
+            "- `remember that liquidations are forced closures of positions`\n"
+            "- `teach: what is open interest? -> Open interest is the total number of outstanding contracts`\n\n"
             "**Try asking:**\n"
             "- summarize\n"
-            "- what's the bias on BTC?\n"
+            "- what’s the bias on BTC?\n"
             "- any bullish patterns?\n"
-            "- what is a funding rate?\n"
-            "- explain RSI\n"
-            "- what does a hammer candle mean?"
+            "- what is RSI?\n"
+            "- explain funding rate"
         )
 
-    # ---------- SUMMARIZE / OVERVIEW ----------
-    if any(w in msg for w in ["summarize", "summary", "overview", "what's going on", "market overview", "current state"]):
+    # ---------- SUMMARIZE ----------
+    if any(w in msg for w in ["summarize", "summary", "overview", "what’s going on", "what's going on", "market overview", "current state"]):
         return f"📊 **Live App Snapshot**\n\n{context}"
 
     # ---------- PREDICTIVE BIAS ----------
     if any(w in msg for w in ["bias", "predict", "prediction", "outlook", "bullish or bearish"]):
-        if "Overall Score:" in context or "--- Predictive Bias ---" in context:
+        if "--- Predictive Bias ---" in context or "Overall Score:" in context:
             start = context.find("--- Predictive Bias ---")
             end = context.find("--- Sentiment ---")
             section = context[start:end].strip() if start != -1 else "Prediction data not fully loaded."
@@ -1153,7 +1189,7 @@ def simple_ai_reply(user_msg: str, context: str, tickers: list) -> str:
             return f"⚖️ **Futures Positioning**\n\n{section}"
         return "Futures positioning data is not loaded yet. Make sure you have tickers selected."
 
-    # ---------- FEAR & GREED / SENTIMENT / NEWS ----------
+    # ---------- FEAR & GREED / SENTIMENT ----------
     if any(w in msg for w in ["fear", "greed", "sentiment", "news", "fng"]):
         if "Fear & Greed:" in context:
             start = context.find("--- Sentiment ---")
@@ -1170,152 +1206,145 @@ def simple_ai_reply(user_msg: str, context: str, tickers: list) -> str:
         return "Price data is not loaded yet. Enter tickers in the sidebar first."
 
     # =====================================================
-    # GENERAL KNOWLEDGE (zero-API built-in explanations)
+    # BUILT-IN GENERAL KNOWLEDGE
     # =====================================================
-
-    # RSI
     if "rsi" in msg and any(w in msg for w in ["what is", "explain", "mean", "how does", "definition"]):
         return (
             "**RSI (Relative Strength Index)** is a momentum oscillator that measures the speed and magnitude of recent price changes.\n\n"
             "- Range: 0 to 100\n"
-            "- Above 70 → traditionally **overbought** (possible pullback)\n"
-            "- Below 30 → traditionally **oversold** (possible bounce)\n"
-            "- It works best when combined with trend and support/resistance.\n\n"
-            "You can see the live RSI for your selected assets in the main chart and metrics."
+            "- Above 70 → traditionally **overbought**\n"
+            "- Below 30 → traditionally **oversold**\n"
+            "- Works best when combined with trend and support/resistance.\n\n"
+            "You can see the live RSI for your selected assets in the main chart."
         )
 
-    # MACD
     if "macd" in msg and any(w in msg for w in ["what is", "explain", "mean", "how does"]):
         return (
             "**MACD (Moving Average Convergence Divergence)** shows the relationship between two moving averages of price.\n\n"
             "- MACD Line = 12-period EMA − 26-period EMA\n"
             "- Signal Line = 9-period EMA of the MACD Line\n"
             "- Histogram = MACD Line − Signal Line\n\n"
-            "**Common signals:**\n"
+            "Common signals:\n"
             "- MACD crosses above Signal → potential bullish momentum\n"
-            "- MACD crosses below Signal → potential bearish momentum\n"
-            "- Histogram growing = momentum strengthening"
+            "- MACD crosses below Signal → potential bearish momentum"
         )
 
-    # Funding Rate
     if "funding" in msg and any(w in msg for w in ["what is", "explain", "mean", "how does"]):
         return (
-            "**Funding Rate** is a periodic payment exchanged between long and short traders in perpetual futures markets.\n\n"
-            "- Positive funding → Longs pay Shorts (market is bullish / crowded long)\n"
-            "- Negative funding → Shorts pay Longs (market is bearish / crowded short)\n\n"
-            "Extremely high positive funding can sometimes signal an overcrowded long trade and raise the chance of a long squeeze. "
-            "The app shows live funding from OKX for your selected tickers."
+            "**Funding Rate** is a periodic payment exchanged between long and short traders in perpetual futures.\n\n"
+            "- Positive funding → Longs pay Shorts (bullish / crowded long)\n"
+            "- Negative funding → Shorts pay Longs (bearish / crowded short)\n\n"
+            "Extremely high positive funding can signal an overcrowded long trade. The app shows live funding from OKX."
         )
 
-    # Long / Short Ratio
     if any(w in msg for w in ["long short ratio", "long/short", "longs vs shorts"]) and any(w in msg for w in ["what", "explain", "mean"]):
         return (
-            "The **Long/Short Account Ratio** shows what percentage of traders are currently long vs short on a perpetual contract.\n\n"
+            "The **Long/Short Account Ratio** shows what percentage of traders are currently long vs short.\n\n"
             "- High Long % (e.g. > 65%) can indicate a crowded long trade\n"
             "- High Short % can indicate crowded shorts\n\n"
-            "It is a **contrarian** indicator for many traders — extreme readings often precede squeezes. "
-            "You can see the live ratios in the Futures Metrics section of the app."
+            "Many traders treat extreme readings as a contrarian signal."
         )
 
-    # Candlestick patterns explanations
     if "doji" in msg and any(w in msg for w in ["what", "mean", "explain"]):
         return (
-            "A **Doji** is a candlestick where the open and close are almost equal, creating a very small body.\n\n"
-            "It signals **indecision** between buyers and sellers. After a strong trend, a Doji can warn that the trend may be losing strength and a reversal or consolidation could follow."
+            "A **Doji** is a candlestick where the open and close are almost equal.\n\n"
+            "It signals **indecision**. After a strong trend, a Doji can warn that the trend may be losing strength."
         )
 
     if "hammer" in msg and any(w in msg for w in ["what", "mean", "explain"]):
         return (
             "A **Hammer** is a bullish reversal candlestick that appears after a decline.\n\n"
             "It has a small body at the top and a long lower wick (at least 2× the body). "
-            "It shows that sellers pushed the price down, but buyers stepped in strongly and closed the price back up near the open — a sign of potential buying pressure."
+            "It shows sellers pushed price down but buyers stepped in strongly."
         )
 
     if "shooting star" in msg and any(w in msg for w in ["what", "mean", "explain"]):
         return (
             "A **Shooting Star** is a bearish reversal candlestick that appears after an advance.\n\n"
             "It has a small body at the bottom and a long upper wick. "
-            "It shows that buyers pushed the price up, but sellers took control and closed the price back down near the open — a warning of potential selling pressure."
+            "It shows buyers pushed price up but sellers took control by the close."
         )
 
     if "engulfing" in msg and any(w in msg for w in ["what", "mean", "explain"]):
         return (
             "**Engulfing patterns** are two-candle reversal signals:\n\n"
-            "- **Bullish Engulfing**: A green candle whose body completely covers the previous red candle’s body → potential bullish reversal\n"
-            "- **Bearish Engulfing**: A red candle whose body completely covers the previous green candle’s body → potential bearish reversal\n\n"
-            "They are stronger when they appear at support/resistance or after a clear trend."
+            "- **Bullish Engulfing**: Green candle body completely covers the previous red body\n"
+            "- **Bearish Engulfing**: Red candle body completely covers the previous green body\n\n"
+            "Stronger when they appear at support/resistance or after a clear trend."
         )
 
     if "double top" in msg and any(w in msg for w in ["what", "mean", "explain"]):
         return (
             "A **Double Top** is a bearish reversal pattern that looks like the letter “M”.\n\n"
-            "Price makes two peaks at roughly the same level, separated by a pullback. "
-            "A break below the low between the two peaks is often seen as confirmation that sellers are in control."
+            "Price makes two peaks at roughly the same level. A break below the low between the peaks is often seen as confirmation."
         )
 
     if "double bottom" in msg and any(w in msg for w in ["what", "mean", "explain"]):
         return (
             "A **Double Bottom** is a bullish reversal pattern that looks like the letter “W”.\n\n"
-            "Price makes two troughs at roughly the same level. "
-            "A break above the high between the two troughs is often seen as confirmation that buyers are taking control."
+            "Price makes two troughs at roughly the same level. A break above the high between the troughs is often seen as confirmation."
         )
 
-    # Support / Resistance
     if any(w in msg for w in ["support", "resistance"]) and any(w in msg for w in ["what is", "explain", "mean"]):
         return (
-            "**Support** is a price level where buying interest is historically strong enough to pause or reverse a decline.\n"
-            "**Resistance** is a price level where selling interest is historically strong enough to pause or reverse an advance.\n\n"
-            "These levels are not exact — they are zones. The app marks recent local support and resistance when Pattern Recognition is enabled."
+            "**Support** is a price level where buying interest has historically been strong enough to pause or reverse a decline.\n"
+            "**Resistance** is a price level where selling interest has historically been strong enough to pause or reverse an advance.\n\n"
+            "These are zones rather than exact prices. The app marks recent local support and resistance when Pattern Recognition is enabled."
         )
 
-    # Bollinger Bands
     if "bollinger" in msg and any(w in msg for w in ["what", "explain", "mean"]):
         return (
-            "**Bollinger Bands** consist of:\n"
-            "- A middle band (usually 20-period SMA)\n"
-            "- An upper band (SMA + 2 standard deviations)\n"
-            "- A lower band (SMA − 2 standard deviations)\n\n"
-            "Price tends to bounce between the bands. Touches of the lower band can signal oversold conditions in a range, while touches of the upper band can signal overbought conditions. "
-            "Band width also expands in high volatility and contracts in low volatility (the 'squeeze')."
+            "**Bollinger Bands** consist of a middle SMA (usually 20) with upper and lower bands at ±2 standard deviations.\n\n"
+            "Price tends to bounce between the bands. Narrow bands (a “squeeze”) often precede bigger moves."
         )
 
-    # SMA
     if any(w in msg for w in ["sma", "moving average", "50 sma", "200 sma"]) and any(w in msg for w in ["what", "explain", "mean"]):
         return (
             "A **Simple Moving Average (SMA)** is the average closing price over a set number of periods.\n\n"
-            "- **50 SMA** → medium-term trend filter\n"
-            "- **200 SMA** → long-term trend filter\n\n"
-            "Common interpretations:\n"
-            "- Price above rising 50 & 200 SMA → bullish trend structure\n"
-            "- Price below falling 50 & 200 SMA → bearish trend structure\n"
-            "- 50 SMA crossing above 200 SMA is often called a 'Golden Cross'"
+            "- 50 SMA → medium-term trend\n"
+            "- 200 SMA → long-term trend\n\n"
+            "Price above rising 50 & 200 SMAs is generally considered a bullish structure (and vice versa)."
         )
 
-    # Perpetual futures
     if any(w in msg for w in ["perpetual", "perp", "perpetuals"]) and any(w in msg for w in ["what", "explain"]):
         return (
             "**Perpetual futures** (perps) are derivative contracts with no expiry date. "
-            "They use a funding rate mechanism to keep the contract price anchored close to the spot price.\n\n"
-            "This is why the app tracks funding rates and long/short ratios — they give insight into how crowded the perpetual market is."
+            "They use a funding rate mechanism to keep the contract price close to the spot price.\n\n"
+            "This is why the app tracks funding rates and long/short ratios."
         )
 
-    # General fallback with guidance
+    # ---------- FALLBACK ----------
     return (
         "I can help with both **live app data** and **general crypto/trading concepts**.\n\n"
-        "**Live data examples:**\n"
-        "- summarize\n"
-        "- what's the bias?\n"
-        "- any patterns?\n"
-        "- how is funding?\n"
-        "- show RSI / prices\n\n"
-        "**General knowledge examples:**\n"
-        "- what is RSI?\n"
-        "- explain funding rate\n"
-        "- what does a hammer candle mean?\n"
-        "- what is a double bottom?\n"
-        "- explain bollinger bands\n\n"
+        "You can also **teach me** new things:\n"
+        "- `remember that liquidations are forced closures of leveraged positions`\n"
+        "- `teach: what is TVL? -> Total Value Locked in a DeFi protocol`\n\n"
         f"Currently tracking: **{', '.join(tickers) if tickers else 'No tickers loaded'}**"
     )
+
+
+def load_taught_knowledge() -> dict:
+    """Load previously taught knowledge from a local JSON file (persists across sessions)."""
+    import json
+    import os
+    path = "taught_knowledge.json"
+    if os.path.exists(path):
+        try:
+            with open(path, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def save_taught_knowledge(taught: dict):
+    """Save taught knowledge so it persists across browser refreshes / sessions."""
+    import json
+    try:
+        with open("taught_knowledge.json", "w") as f:
+            json.dump(taught, f, indent=2)
+    except Exception:
+        pass  # fail silently if running in a restricted environment
 
 
 # ============================================================
@@ -1942,18 +1971,37 @@ with tab_predict:
                     "longer than models can stay solvent. Always do your own research."
                 )
 
+
 # ============================================================
-# AI ASSISTANT TAB (Free, zero API cost)
+# AI ASSISTANT TAB (Free, zero API cost, Teachable)
 # ============================================================
 with tab_chat:
-    st.subheader("💬 Free Data-Aware AI Assistant")
-    st.caption("Answers questions using only the live data currently loaded in the app. No external API calls • Completely free.")
+    st.subheader("💬 Free Data-Aware AI Assistant (Teachable)")
+    st.caption("Zero API • Uses live app data • You can teach it new knowledge that persists across sessions.")
 
-    # Initialize chat history
+    # --- Load / initialize taught knowledge ---
+    if "taught_knowledge" not in st.session_state:
+        st.session_state.taught_knowledge = load_taught_knowledge()
+
+    # --- Chat history ---
     if "chat_messages" not in st.session_state:
         st.session_state.chat_messages = [
-            {"role": "assistant", "content": "Hi! I can help you understand the current market data loaded in the app. Ask me about prices, patterns, bias scores, funding rates, or just say **summarize**."}
+            {
+                "role": "assistant",
+                "content": (
+                    "Hi! I can answer questions using the live data in the app and general crypto knowledge.\n\n"
+                    "You can also **teach me**:\n"
+                    "- `remember that liquidations are forced closures of leveraged positions`\n"
+                    "- `teach: what is TVL? -> Total Value Locked in a DeFi protocol`\n\n"
+                    "Try: **summarize**, **what’s the bias?**, **any patterns?**, **what is RSI?**"
+                )
+            }
         ]
+
+    # Show how many things it has learned
+    taught_count = len(st.session_state.taught_knowledge)
+    if taught_count > 0:
+        st.info(f"📚 I currently know **{taught_count}** custom things you (or previous sessions) taught me.")
 
     # Display chat history
     for msg in st.session_state.chat_messages:
@@ -1961,14 +2009,13 @@ with tab_chat:
             st.markdown(msg["content"])
 
     # Chat input
-    if prompt := st.chat_input("Ask about the current data..."):
+    if prompt := st.chat_input("Ask anything or teach me something..."):
         # Add user message
         st.session_state.chat_messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # Build live context from whatever is available
-        # We re-fetch lightly so the assistant always has fresh context
+        # Build live context
         try:
             live_data = load_ticker_data(tuple(tkrs), interval, lookback_bars, period, is_6h) if tkrs else {}
         except Exception:
@@ -1981,23 +2028,26 @@ with tab_chat:
         fng = ("N/A", "N/A")
 
         if live_data and tkrs:
-            # Patterns for the first ticker as example
             first_t = list(live_data.keys())[0]
             if show_patterns:
-                live_patterns = detect_all_patterns(live_data[first_t])
+                try:
+                    live_patterns = detect_all_patterns(live_data[first_t])
+                except Exception:
+                    live_patterns = []
 
-            # Quick futures
             for t, hist in live_data.items():
                 if not hist.empty and "close" in hist.columns:
                     cpx = float(hist["close"].iloc[-1])
-                    fut = get_futures_metrics(t, current_price=cpx)
-                    live_liquidity[t] = {
-                        "longs": fut.get("long_pct", 50),
-                        "shorts": fut.get("short_pct", 50),
-                        "funding": fut.get("funding_rate"),
-                    }
+                    try:
+                        fut = get_futures_metrics(t, current_price=cpx)
+                        live_liquidity[t] = {
+                            "longs": fut.get("long_pct", 50),
+                            "shorts": fut.get("short_pct", 50),
+                            "funding": fut.get("funding_rate"),
+                        }
+                    except Exception:
+                        pass
 
-            # Prediction for first ticker
             try:
                 fng = get_fear_greed()
                 live_news = get_crypto_news(cache_buster=str(pd.Timestamp.now()))
@@ -2022,12 +2072,37 @@ with tab_chat:
             news=live_news,
         )
 
-        # Generate reply
-        reply = simple_ai_reply(prompt, context, tkrs)
+        # Generate reply (pass the taught knowledge dict)
+        reply = simple_ai_reply(
+            prompt,
+            context,
+            tkrs,
+            st.session_state.taught_knowledge
+        )
+
+        # If the user just taught something, persist it
+        if prompt.lower().startswith(("remember that ", "teach:", "learn:")):
+            save_taught_knowledge(st.session_state.taught_knowledge)
 
         st.session_state.chat_messages.append({"role": "assistant", "content": reply})
         with st.chat_message("assistant"):
             st.markdown(reply)
+
+    # Optional: show & manage taught knowledge
+    with st.expander("📚 Manage taught knowledge"):
+        if st.session_state.taught_knowledge:
+            for q, a in list(st.session_state.taught_knowledge.items()):
+                col1, col2 = st.columns([5, 1])
+                with col1:
+                    st.markdown(f"**{q}** → {a}")
+                with col2:
+                    if st.button("🗑️", key=f"del_{q}"):
+                        del st.session_state.taught_knowledge[q]
+                        save_taught_knowledge(st.session_state.taught_knowledge)
+                        st.rerun()
+        else:
+            st.write("Nothing taught yet. Use the chat to teach me!")
+
 
 
 st.sidebar.success(f"Last refresh: {pd.Timestamp.now().strftime('%H:%M:%S')}")
