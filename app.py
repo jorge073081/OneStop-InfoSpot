@@ -200,10 +200,6 @@ def get_active_users_store() -> Dict[str, float]:
     return {}
 
 def get_active_user_count(timeout_seconds: int = 90) -> int:
-    """
-    Returns approximate number of currently active users.
-    Works well on single-process deployments (local, many VPS, Streamlit Cloud single replica).
-    """
     store = get_active_users_store()
     
     if "session_id" not in st.session_state:
@@ -261,6 +257,256 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["macd"], df["macd_signal"], df["macd_hist"] = compute_macd(df["close"])
     df["bb_mid"], df["bb_upper"], df["bb_lower"] = compute_bollinger(df["close"])
     return df
+
+# ============================================================
+# 3b. CHART PATTERN RECOGNITION ENGINE
+# ============================================================
+def detect_candlestick_patterns(df: pd.DataFrame) -> List[Dict]:
+    """Detect common candlestick patterns. Returns list of dicts with pattern info."""
+    patterns = []
+    if df is None or len(df) < 5 or not all(c in df.columns for c in ["open", "high", "low", "close"]):
+        return patterns
+    
+    df = df.copy()
+    body = (df["close"] - df["open"]).abs()
+    range_ = df["high"] - df["low"]
+    upper_wick = df["high"] - df[["open", "close"]].max(axis=1)
+    lower_wick = df[["open", "close"]].min(axis=1) - df["low"]
+    
+    # Avoid division by zero
+    range_ = range_.replace(0, np.nan)
+    
+    for i in range(2, len(df)):
+        idx = df.index[i]
+        o, h, l, c = df["open"].iloc[i], df["high"].iloc[i], df["low"].iloc[i], df["close"].iloc[i]
+        prev_o, prev_c = df["open"].iloc[i-1], df["close"].iloc[i-1]
+        body_i = body.iloc[i]
+        range_i = range_.iloc[i]
+        
+        if pd.isna(range_i) or range_i == 0:
+            continue
+            
+        # Doji
+        if body_i / range_i < 0.1:
+            patterns.append({
+                "type": "Doji",
+                "direction": "Neutral",
+                "index": idx,
+                "price": c,
+                "confidence": "Medium",
+                "description": "Indecision / potential reversal"
+            })
+        
+        # Hammer (bullish)
+        if (lower_wick.iloc[i] > 2 * body_i) and (upper_wick.iloc[i] < body_i * 0.3) and (c > o):
+            patterns.append({
+                "type": "Hammer",
+                "direction": "Bullish",
+                "index": idx,
+                "price": c,
+                "confidence": "Medium",
+                "description": "Potential bullish reversal"
+            })
+        
+        # Shooting Star (bearish)
+        if (upper_wick.iloc[i] > 2 * body_i) and (lower_wick.iloc[i] < body_i * 0.3) and (c < o):
+            patterns.append({
+                "type": "Shooting Star",
+                "direction": "Bearish",
+                "index": idx,
+                "price": c,
+                "confidence": "Medium",
+                "description": "Potential bearish reversal"
+            })
+        
+        # Bullish Engulfing
+        if (prev_c < prev_o) and (c > o) and (c >= prev_o) and (o <= prev_c) and (body_i > body.iloc[i-1] * 1.1):
+            patterns.append({
+                "type": "Bullish Engulfing",
+                "direction": "Bullish",
+                "index": idx,
+                "price": c,
+                "confidence": "High",
+                "description": "Strong bullish reversal signal"
+            })
+        
+        # Bearish Engulfing
+        if (prev_c > prev_o) and (c < o) and (c <= prev_o) and (o >= prev_c) and (body_i > body.iloc[i-1] * 1.1):
+            patterns.append({
+                "type": "Bearish Engulfing",
+                "direction": "Bearish",
+                "index": idx,
+                "price": c,
+                "confidence": "High",
+                "description": "Strong bearish reversal signal"
+            })
+    
+    # Keep only the most recent patterns (last 30 bars worth)
+    recent_cutoff = df.index[-min(40, len(df))]
+    patterns = [p for p in patterns if p["index"] >= recent_cutoff]
+    return patterns[-12:]  # limit to last 12 detections
+
+
+def detect_chart_patterns(df: pd.DataFrame) -> List[Dict]:
+    """Detect higher-level chart patterns (Double Top/Bottom, simple S/R)."""
+    patterns = []
+    if df is None or len(df) < 20 or "close" not in df.columns:
+        return patterns
+    
+    closes = df["close"].values
+    highs = df["high"].values if "high" in df.columns else closes
+    lows = df["low"].values if "low" in df.columns else closes
+    idx = df.index
+    
+    # --- Simple Support & Resistance (local peaks/troughs) ---
+    window = 5
+    for i in range(window, len(df) - window):
+        # Local high (resistance)
+        if highs[i] == max(highs[i-window:i+window+1]):
+            patterns.append({
+                "type": "Resistance",
+                "direction": "Neutral",
+                "index": idx[i],
+                "price": highs[i],
+                "confidence": "Medium",
+                "description": f"Local resistance @ {highs[i]:.2f}"
+            })
+        # Local low (support)
+        if lows[i] == min(lows[i-window:i+window+1]):
+            patterns.append({
+                "type": "Support",
+                "direction": "Neutral",
+                "index": idx[i],
+                "price": lows[i],
+                "confidence": "Medium",
+                "description": f"Local support @ {lows[i]:.2f}"
+            })
+    
+    # --- Double Top / Double Bottom (simplified) ---
+    lookback = min(60, len(df) - 10)
+    recent_highs = []
+    recent_lows = []
+    
+    for i in range(len(df) - lookback, len(df) - 3):
+        if highs[i] == max(highs[max(0, i-4):i+5]):
+            recent_highs.append((i, highs[i]))
+        if lows[i] == min(lows[max(0, i-4):i+5]):
+            recent_lows.append((i, lows[i]))
+    
+    # Double Top
+    if len(recent_highs) >= 2:
+        for j in range(len(recent_highs) - 1):
+            i1, p1 = recent_highs[j]
+            i2, p2 = recent_highs[j+1]
+            if abs(p1 - p2) / p1 < 0.025 and (i2 - i1) > 5:  # within 2.5% and separated
+                patterns.append({
+                    "type": "Double Top",
+                    "direction": "Bearish",
+                    "index": idx[i2],
+                    "price": p2,
+                    "confidence": "Medium",
+                    "description": f"Double Top near {p2:.2f}"
+                })
+                break
+    
+    # Double Bottom
+    if len(recent_lows) >= 2:
+        for j in range(len(recent_lows) - 1):
+            i1, p1 = recent_lows[j]
+            i2, p2 = recent_lows[j+1]
+            if abs(p1 - p2) / p1 < 0.025 and (i2 - i1) > 5:
+                patterns.append({
+                    "type": "Double Bottom",
+                    "direction": "Bullish",
+                    "index": idx[i2],
+                    "price": p2,
+                    "confidence": "Medium",
+                    "description": f"Double Bottom near {p2:.2f}"
+                })
+                break
+    
+    # Keep only reasonably recent
+    if len(df) > 50:
+        cutoff = df.index[-50]
+        patterns = [p for p in patterns if p["index"] >= cutoff]
+    
+    return patterns
+
+
+def detect_all_patterns(df: pd.DataFrame) -> List[Dict]:
+    """Run all pattern detectors and return combined list."""
+    candle = detect_candlestick_patterns(df)
+    chart = detect_chart_patterns(df)
+    return candle + chart
+
+
+def add_patterns_to_chart(fig: go.Figure, patterns: List[Dict], row: int = 1) -> go.Figure:
+    """Overlay detected patterns on the price chart as annotations and markers."""
+    if not patterns:
+        return fig
+    
+    color_map = {
+        "Bullish": "#00FF7F",
+        "Bearish": "#FF4500",
+        "Neutral": "#FFD700",
+    }
+    
+    symbol_map = {
+        "Doji": "diamond",
+        "Hammer": "triangle-up",
+        "Shooting Star": "triangle-down",
+        "Bullish Engulfing": "star",
+        "Bearish Engulfing": "star",
+        "Double Top": "x",
+        "Double Bottom": "x",
+        "Support": "circle",
+        "Resistance": "circle",
+    }
+    
+    for p in patterns:
+        color = color_map.get(p["direction"], "#FFFFFF")
+        symbol = symbol_map.get(p["type"], "circle")
+        
+        # Marker
+        fig.add_trace(
+            go.Scatter(
+                x=[p["index"]],
+                y=[p["price"]],
+                mode="markers",
+                marker=dict(
+                    symbol=symbol,
+                    size=12,
+                    color=color,
+                    line=dict(width=1, color="white"),
+                ),
+                name=p["type"],
+                showlegend=False,
+                hovertemplate=f"<b>{p['type']}</b><br>{p['description']}<br>Price: {p['price']:.2f}<extra></extra>",
+            ),
+            row=row, col=1,
+        )
+        
+        # Annotation label (only for high-confidence or key patterns)
+        if p["confidence"] == "High" or p["type"] in ["Double Top", "Double Bottom", "Support", "Resistance"]:
+            fig.add_annotation(
+                x=p["index"],
+                y=p["price"],
+                text=p["type"],
+                showarrow=True,
+                arrowhead=2,
+                arrowsize=1,
+                arrowwidth=1,
+                arrowcolor=color,
+                ax=0,
+                ay=-30 if p["direction"] != "Bearish" else 30,
+                font=dict(size=10, color=color, family="Playfair Display, serif"),
+                bgcolor="rgba(14,17,23,0.8)",
+                bordercolor=color,
+                borderwidth=1,
+                row=row, col=1,
+            )
+    
+    return fig
 
 # ============================================================
 # 4. DATA EXTRACTION CORES
@@ -449,7 +695,6 @@ def get_real_onchain(ticker: str) -> Dict[str, Any]:
 
 @st.cache_data(ttl=60)
 def get_futures_metrics(ticker: str, current_price: float = 0.0) -> Dict[str, Any]:
-    """OKX-only futures metrics (Bybit/Binance are geo-blocked on this host)."""
     t = ticker.upper().replace("-USD", "").replace("USDT", "").replace("USD", "").strip()
     symbol_okx = f"{t}-USDT-SWAP"
     ccy = t
@@ -529,7 +774,6 @@ def load_macro_data() -> Dict[str, pd.DataFrame]:
 # 4b. PREDICTIVE ANALYTICS ENGINE
 # ============================================================
 def compute_technical_score(hist: pd.DataFrame) -> Dict[str, float]:
-    """Score technicals from -100 (very bearish) to +100 (very bullish)"""
     if hist is None or hist.empty or "close" not in hist.columns:
         return {"score": 0.0, "details": {}}
     
@@ -537,7 +781,6 @@ def compute_technical_score(hist: pd.DataFrame) -> Dict[str, float]:
     details = {}
     last = hist.iloc[-1]
     
-    # RSI
     if "rsi" in hist.columns and not pd.isna(last["rsi"]):
         rsi = last["rsi"]
         if rsi < 30:
@@ -553,7 +796,6 @@ def compute_technical_score(hist: pd.DataFrame) -> Dict[str, float]:
         score += rsi_score * 0.25
         details["RSI"] = round(rsi_score, 1)
     
-    # MACD
     if "macd" in hist.columns and "macd_signal" in hist.columns:
         macd = last["macd"]
         signal = last["macd_signal"]
@@ -567,7 +809,6 @@ def compute_technical_score(hist: pd.DataFrame) -> Dict[str, float]:
         score += macd_score * 0.20
         details["MACD"] = round(macd_score, 1)
     
-    # Bollinger %B
     if all(c in hist.columns for c in ["bb_upper", "bb_lower", "close"]):
         bb_range = last["bb_upper"] - last["bb_lower"]
         if bb_range > 0:
@@ -581,7 +822,6 @@ def compute_technical_score(hist: pd.DataFrame) -> Dict[str, float]:
             score += bb_score * 0.15
             details["Bollinger %B"] = round(bb_score, 1)
     
-    # SMA trend
     if "sma50" in hist.columns and "sma200" in hist.columns:
         if last["close"] > last["sma50"] > last["sma200"]:
             sma_score = 30
@@ -596,7 +836,6 @@ def compute_technical_score(hist: pd.DataFrame) -> Dict[str, float]:
         score += sma_score * 0.25
         details["SMA Trend"] = round(sma_score, 1)
     
-    # Price vs period average
     period_avg = hist["close"].mean()
     dist = ((last["close"] / period_avg) - 1) * 100
     if dist < -8:
@@ -612,14 +851,12 @@ def compute_technical_score(hist: pd.DataFrame) -> Dict[str, float]:
 
 
 def compute_positioning_score(futures: Dict) -> Dict[str, float]:
-    """Score based on Long/Short + Funding"""
     score = 0.0
     details = {}
     
     long_pct = futures.get("long_pct", 50.0)
     funding = futures.get("funding_rate")
     
-    # Crowded long is bearish (contrarian)
     if long_pct > 65:
         pos_score = -30
     elif long_pct > 55:
@@ -633,7 +870,6 @@ def compute_positioning_score(futures: Dict) -> Dict[str, float]:
     score += pos_score * 0.6
     details["Long/Short Positioning"] = round(pos_score, 1)
     
-    # High positive funding = longs paying shorts (often bearish short-term)
     if funding is not None:
         if funding > 0.05:
             fund_score = -25
@@ -650,14 +886,11 @@ def compute_positioning_score(futures: Dict) -> Dict[str, float]:
 
 
 def compute_sentiment_score(fear_greed_value: str, news_articles: List[Dict]) -> Dict[str, float]:
-    """Combine Fear & Greed + news sentiment"""
     score = 0.0
     details = {}
     
-    # Fear & Greed (0-100)
     try:
         fng = float(fear_greed_value)
-        # Extreme fear is often bullish (contrarian)
         if fng < 20:
             fng_score = 40
         elif fng < 35:
@@ -673,12 +906,11 @@ def compute_sentiment_score(fear_greed_value: str, news_articles: List[Dict]) ->
     except (ValueError, TypeError):
         details["Fear & Greed"] = 0.0
     
-    # News sentiment (average VADER)
     if news_articles:
         sia = SIA()
         scores = [sia.polarity_scores(a["title"])["compound"] for a in news_articles]
         avg_sent = np.mean(scores) if scores else 0.0
-        news_score = avg_sent * 50  # scale -1..1 → -50..50
+        news_score = avg_sent * 50
         score += news_score * 0.45
         details["News Sentiment"] = round(news_score, 1)
     else:
@@ -688,14 +920,12 @@ def compute_sentiment_score(fear_greed_value: str, news_articles: List[Dict]) ->
 
 
 def compute_macro_score(macro_data: Dict[str, pd.DataFrame]) -> Dict[str, float]:
-    """Simple risk-on / risk-off macro bias"""
     score = 0.0
     details = {}
     
     if not macro_data:
         return {"score": 0.0, "details": {}}
     
-    # S&P and Nasdaq positive = risk-on
     for name in ["S&P 500 Index", "NASDAQ 100 Index"]:
         if name in macro_data and not macro_data[name].empty:
             df = macro_data[name]
@@ -706,7 +936,6 @@ def compute_macro_score(macro_data: Dict[str, pd.DataFrame]) -> Dict[str, float]
                 elif ret < -2:
                     score -= 15
     
-    # Rising DXY / Yields usually pressure risk assets
     if "DXY (U.S. Dollar Index)" in macro_data:
         df = macro_data["DXY (U.S. Dollar Index)"]
         if len(df) > 5:
@@ -738,13 +967,11 @@ def generate_prediction(
     news: List[Dict],
     macro_data: Dict[str, pd.DataFrame],
 ) -> Dict[str, Any]:
-    """Full multi-factor prediction package"""
     tech = compute_technical_score(hist)
     pos = compute_positioning_score(futures)
     sent = compute_sentiment_score(fear_greed_value, news)
     macro = compute_macro_score(macro_data)
     
-    # Weighted overall score
     weights = {
         "Technical": 0.40,
         "Positioning": 0.25,
@@ -759,7 +986,6 @@ def generate_prediction(
         + macro["score"] * weights["Macro"]
     )
     
-    # Bias label
     if overall >= 35:
         bias = "Strong Bullish"
         color = "#00FF7F"
@@ -776,9 +1002,8 @@ def generate_prediction(
         bias = "Neutral / Mixed"
         color = "#00FFFF"
     
-    # Simple volatility-based projected range (next ~5-7 bars)
     last_close = float(hist["close"].iloc[-1])
-    recent_vol = hist["close"].pct_change().std() * 100  # percent
+    recent_vol = hist["close"].pct_change().std() * 100
     if pd.isna(recent_vol) or recent_vol == 0:
         recent_vol = 2.5
     
@@ -818,6 +1043,7 @@ def build_asset_chart(
     show_vwap: bool,
     show_vs_btc: bool,
     btc_data: Optional[pd.DataFrame] = None,
+    patterns: Optional[List[Dict]] = None,
 ) -> go.Figure:
     h_data = h_data.copy()
     if show_baseline:
@@ -891,6 +1117,11 @@ def build_asset_chart(
     if show_vwap and "vwap" in h_data.columns:
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["vwap"], name="VWAP",
                                  line=dict(color="#FF00FF", width=1.6)), row=current_row, col=1)
+    
+    # --- PATTERN OVERLAY ---
+    if patterns:
+        fig = add_patterns_to_chart(fig, patterns, row=current_row)
+    
     if show_rsi and "rsi" in h_data.columns:
         current_row += 1
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["rsi"], name="RSI",
@@ -954,6 +1185,12 @@ show_bb = st.sidebar.checkbox("Bollinger Bands (20,2)", value=True)
 show_rsi = st.sidebar.checkbox("RSI (14)", value=True)
 show_macd = st.sidebar.checkbox("MACD (12,26,9)", value=True)
 show_vol_profile = st.sidebar.checkbox("Volume Profile", value=True)
+
+# --- NEW: Chart Pattern Recognition Toggle ---
+st.sidebar.subheader("Pattern Recognition")
+show_patterns = st.sidebar.checkbox("Chart Pattern Recognition", value=False)
+st.sidebar.caption("Detects Doji, Hammer, Engulfing, Double Top/Bottom, Support & Resistance")
+
 st.sidebar.subheader("Overlays & On-chain")
 show_baseline = st.sidebar.checkbox("Historical Baseline (Period Avg)", value=True)
 show_long_baseline = st.sidebar.checkbox("Long-term Baseline (1Y Avg)", value=False)
@@ -970,7 +1207,6 @@ st_autorefresh(interval=rf_rate * 1000, key="datarefresh")
 # ============================================================
 # 7. MAIN LAYOUT
 # ============================================================
-# Active users + Title
 active_users = get_active_user_count(timeout_seconds=90)
 
 col_title, col_users = st.columns([5.5, 1])
@@ -980,7 +1216,7 @@ with col_title:
 with col_users:
     st.metric("🟢 Active Users", active_users)
 
-st.caption("Dark mode • Candlesticks • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro • 15Y Historical • Predictive Analytics")
+st.caption("Dark mode • Candlesticks • Pattern Recognition • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro • 15Y Historical • Predictive Analytics")
 
 tab_crypto, tab_macro, tab_predict = st.tabs([
     "⚡ Crypto Intelligence Terminal",
@@ -1075,6 +1311,12 @@ with tab_crypto:
                     long_avg = get_long_term_avg(m_tgt)
                     if long_avg is not None:
                         h_data["long_baseline"] = long_avg
+                
+                # --- PATTERN DETECTION ---
+                detected_patterns = []
+                if show_patterns:
+                    detected_patterns = detect_all_patterns(h_data)
+                
                 fig = build_asset_chart(
                     h_data=h_data,
                     show_candles=show_candles,
@@ -1089,6 +1331,7 @@ with tab_crypto:
                     show_vwap=show_vwap,
                     show_vs_btc=show_vs_btc,
                     btc_data=btc_data,
+                    patterns=detected_patterns if show_patterns else None,
                 )
                 if show_long_baseline and "long_baseline" in h_data.columns:
                     fig.add_trace(
@@ -1097,6 +1340,25 @@ with tab_crypto:
                         row=1, col=1,
                     )
                 st.plotly_chart(fig, use_container_width=True)
+                
+                # --- PATTERN SUMMARY BOX ---
+                if show_patterns:
+                    if detected_patterns:
+                        st.markdown("#### 🔎 Detected Chart Patterns")
+                        pattern_df = pd.DataFrame([
+                            {
+                                "Pattern": p["type"],
+                                "Direction": p["direction"],
+                                "Confidence": p["confidence"],
+                                "Price": f"${p['price']:,.2f}",
+                                "Description": p["description"],
+                            }
+                            for p in detected_patterns
+                        ])
+                        st.dataframe(pattern_df, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No significant chart patterns detected in the current lookback window.")
+                
                 cols = st.columns(5)
                 if show_rsi and "rsi" in h_data.columns and not h_data["rsi"].isna().all():
                     rsi_val = h_data["rsi"].iloc[-1]
@@ -1249,7 +1511,6 @@ with tab_predict:
     if not tkrs:
         st.info("Enter at least one ticker in the sidebar to generate predictions.")
     else:
-        # Re-use already loaded data where possible
         pred_data = load_ticker_data(tuple(tkrs), interval, lookback_bars, period, is_6h)
         fng_v, fng_c = get_fear_greed()
         news = get_crypto_news(cache_buster=pd.Timestamp.now().strftime('%Y-%m-%d %H:%M'))
@@ -1274,7 +1535,6 @@ with tab_predict:
                     macro_data=macro_data,
                 )
                 
-                # === HEADER SCORE CARD ===
                 st.markdown("### Overall Market Bias")
                 score_col1, score_col2, score_col3 = st.columns([1.5, 1, 1])
                 
@@ -1306,7 +1566,6 @@ with tab_predict:
                 
                 st.markdown("---")
                 
-                # === COMPONENT BREAKDOWN ===
                 st.markdown("### Factor Breakdown")
                 
                 comp_cols = st.columns(4)
@@ -1328,7 +1587,6 @@ with tab_predict:
                             unsafe_allow_html=True,
                         )
                 
-                # Detailed sub-scores
                 st.markdown("#### Detailed Signal Contributions")
                 detail_rows = []
                 for name in component_names:
@@ -1346,7 +1604,6 @@ with tab_predict:
                         hide_index=True,
                     )
                 
-                # === VISUAL SCORE BAR ===
                 st.markdown("### Score Visualization")
                 fig_score = go.Figure()
                 
@@ -1385,7 +1642,6 @@ with tab_predict:
                 fig_score.add_hline(y=0, line_dash="dash", line_color="gray")
                 st.plotly_chart(fig_score, use_container_width=True)
                 
-                # Disclaimer
                 st.info(
                     "⚠️ **Disclaimer**: This Predictive Signal Engine aggregates existing technical, positioning, "
                     "sentiment, and macro data already present in the app. It is a decision-support tool only and "
