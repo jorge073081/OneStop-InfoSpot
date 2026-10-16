@@ -257,6 +257,67 @@ def load_portfolio() -> list:
 def save_portfolio(portfolio: list):
     save_json_file(PORTFOLIO_FILE, portfolio)
 
+
+# ============================================================
+# 2d. ALERTS SYSTEM
+# ============================================================
+ALERTS_FILE = "user_alerts.json"
+
+def load_alerts() -> list:
+    """List of alert dicts"""
+    return load_json_file(ALERTS_FILE, [])
+
+def save_alerts(alerts: list):
+    save_json_file(ALERTS_FILE, alerts)
+
+def check_alerts(alerts: list, data: dict, liquidity_profiles: dict, patterns_by_ticker: dict) -> list:
+    """
+    Evaluate all alerts against current data.
+    Returns list of triggered alert messages.
+    """
+    triggered = []
+    for alert in alerts:
+        try:
+            t = alert.get("ticker", "").upper()
+            atype = alert.get("type")
+            condition = alert.get("condition")
+            value = float(alert.get("value", 0))
+            
+            if atype == "price" and t in data and not data[t].empty:
+                price = float(data[t]["close"].iloc[-1])
+                if condition == "above" and price >= value:
+                    triggered.append(f"🚨 {t} price ${price:,.2f} is ABOVE ${value:,.2f}")
+                elif condition == "below" and price <= value:
+                    triggered.append(f"🚨 {t} price ${price:,.2f} is BELOW ${value:,.2f}")
+            
+            elif atype == "rsi" and t in data and "rsi" in data[t].columns:
+                rsi = data[t]["rsi"].iloc[-1]
+                if not pd.isna(rsi):
+                    if condition == "above" and rsi >= value:
+                        triggered.append(f"🚨 {t} RSI {rsi:.1f} is ABOVE {value}")
+                    elif condition == "below" and rsi <= value:
+                        triggered.append(f"🚨 {t} RSI {rsi:.1f} is BELOW {value}")
+            
+            elif atype == "funding" and t in liquidity_profiles:
+                fr = liquidity_profiles[t].get("funding")
+                if fr is not None:
+                    if condition == "above" and fr >= value:
+                        triggered.append(f"🚨 {t} Funding {fr:.4f}% is ABOVE {value}%")
+                    elif condition == "below" and fr <= value:
+                        triggered.append(f"🚨 {t} Funding {fr:.4f}% is BELOW {value}%")
+            
+            elif atype == "pattern" and t in patterns_by_ticker:
+                pats = patterns_by_ticker.get(t, [])
+                target = alert.get("pattern_type", "").lower()
+                for p in pats:
+                    if target in p["type"].lower():
+                        triggered.append(f"🚨 {t} Pattern detected: {p['type']} ({p['direction']})")
+                        break
+        except Exception:
+            continue
+    return triggered
+
+
 # ============================================================
 # 3. ADVANCED TECHNICAL INDICATORS ALGORITHMS
 # ============================================================
@@ -583,27 +644,36 @@ def load_ticker_data(
     results = {}
     for t in tickers:
         try:
-            hist = yf.Ticker(t).history(period=period, interval=interval, auto_adjust=True)
-            if hist.empty:
-                continue
+            ticker_obj = yf.Ticker(t)
+            hist = ticker_obj.history(period=period, interval=interval, auto_adjust=True)
+            if hist is None or hist.empty:
+                # One retry with a shorter period as fallback
+                hist = ticker_obj.history(period="1y", interval=interval, auto_adjust=True)
+                if hist is None or hist.empty:
+                    continue
             hist = normalize_columns(hist, target_ticker=t)
-            if is_6h:
-                hist = (
-                    hist.resample("6h")
-                    .agg({
-                        "open": "first",
-                        "high": "max",
-                        "low": "min",
-                        "close": "last",
-                        "volume": "sum",
-                    })
-                    .dropna()
-                )
-            hist = add_indicators(hist)
-            display = hist.iloc[-lookback:] if len(hist) >= lookback else hist
-            results[t] = display
+            if is_6h and not hist.empty:
+                try:
+                    hist = (
+                        hist.resample("6h")
+                        .agg({
+                            "open": "first",
+                            "high": "max",
+                            "low": "min",
+                            "close": "last",
+                            "volume": "sum",
+                        })
+                        .dropna()
+                    )
+                except Exception:
+                    pass
+            if not hist.empty:
+                hist = add_indicators(hist)
+                display = hist.iloc[-lookback:] if len(hist) >= lookback else hist
+                results[t] = display
         except Exception as e:
-            st.warning(f"Could not load {t}: {e}")
+            # Fail silently for individual tickers so one bad ticker doesn't break the app
+            pass
     return results
 
 @st.cache_data(ttl=3600)
@@ -1337,6 +1407,56 @@ if st.session_state.portfolio:
             st.session_state.portfolio.pop(i)
             save_portfolio(st.session_state.portfolio)
             st.rerun()
+
+# --- ALERTS ---
+st.sidebar.subheader("🔔 Alerts")
+if "alerts" not in st.session_state:
+    st.session_state.alerts = load_alerts()
+
+with st.sidebar.expander("Create New Alert"):
+    a_ticker = st.text_input("Ticker", placeholder="BTC-USD", key="a_ticker")
+    a_type = st.selectbox("Alert Type", ["price", "rsi", "funding", "pattern"], key="a_type")
+    
+    if a_type == "pattern":
+        a_pattern = st.selectbox("Pattern", ["Hammer", "Doji", "Bullish Engulfing", "Bearish Engulfing", "Double Top", "Double Bottom", "Support", "Resistance"], key="a_pattern")
+        a_condition = "detected"
+        a_value = 0.0
+    else:
+        a_condition = st.selectbox("Condition", ["above", "below"], key="a_cond")
+        a_value = st.number_input("Value", value=0.0, key="a_value")
+        a_pattern = ""
+    
+    if st.button("Add Alert") and a_ticker.strip():
+        t = a_ticker.strip().upper()
+        if not t.endswith("-USD") and t.isalpha():
+            t = t + "-USD"
+        new_alert = {
+            "ticker": t,
+            "type": a_type,
+            "condition": a_condition,
+            "value": a_value,
+            "pattern_type": a_pattern,
+        }
+        st.session_state.alerts.append(new_alert)
+        save_alerts(st.session_state.alerts)
+        st.success("Alert added")
+        st.rerun()
+
+if st.session_state.alerts:
+    st.sidebar.write(f"**Active Alerts ({len(st.session_state.alerts)}):**")
+    for i, a in enumerate(st.session_state.alerts):
+        if a["type"] == "pattern":
+            desc = f"{a['ticker']} → {a['pattern_type']}"
+        else:
+            desc = f"{a['ticker']} {a['type']} {a['condition']} {a['value']}"
+        cols = st.sidebar.columns([4, 1])
+        cols[0].caption(desc)
+        if cols[1].button("x", key=f"rm_alert_{i}"):
+            st.session_state.alerts.pop(i)
+            save_alerts(st.session_state.alerts)
+            st.rerun()
+else:
+    st.sidebar.caption("No active alerts")
 res_cfg = RESOLUTION_MAP[res_disp]
 interval = res_cfg["interval"]
 lookback_bars = res_cfg["lookback"]
@@ -1370,8 +1490,43 @@ with tab_crypto:
     else:
         data = load_ticker_data(tuple(tkrs), interval, lookback_bars, period, is_6h)
         if not data:
-            st.error("No valid data loaded. Check tickers or try a different resolution.")
+            st.error("No valid data loaded. Check tickers or try a different resolution. Some data sources may be temporarily unavailable.")
         else:
+            # ----- Evaluate Alerts -----
+            patterns_by_ticker = {}
+            if show_patterns:
+                for t, hist in data.items():
+                    try:
+                        patterns_by_ticker[t] = detect_all_patterns(hist)
+                    except Exception:
+                        patterns_by_ticker[t] = []
+            
+            # Build temporary liquidity for alert checking
+            temp_liquidity = {}
+            for t, hist in data.items():
+                if not hist.empty and "close" in hist.columns:
+                    try:
+                        cpx = float(hist["close"].iloc[-1])
+                        fut = get_futures_metrics(t, current_price=cpx)
+                        temp_liquidity[t] = {
+                            "longs": fut.get("long_pct", 50),
+                            "shorts": fut.get("short_pct", 50),
+                            "funding": fut.get("funding_rate"),
+                        }
+                    except Exception:
+                        pass
+            
+            if "alerts" in st.session_state and st.session_state.alerts:
+                triggered = check_alerts(
+                    st.session_state.alerts,
+                    data,
+                    temp_liquidity,
+                    patterns_by_ticker
+                )
+                if triggered:
+                    for msg in triggered:
+                        st.warning(msg)
+
             daily_pivots = get_daily_pivots(tuple(tkrs))
             btc_data = None
             if show_vs_btc:
