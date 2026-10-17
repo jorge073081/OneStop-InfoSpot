@@ -1808,7 +1808,6 @@ if t_raw != st.session_state.main_tickers_value:
 
 tkrs = [t.strip().upper() for t in st.session_state.main_tickers_value.split(",") if t.strip()]
 
-st.sidebar.caption("⭐ Manage Watchlist & 💼 Portfolio in the **Watchlist & Portfolio** tab")
 res_disp = st.sidebar.selectbox("Resolution", list(RESOLUTION_MAP.keys()))
 rf_rate = st.sidebar.slider("Refresh Rate (Seconds)", 15, 120, 45)
 
@@ -1944,11 +1943,6 @@ st_autorefresh(interval=rf_rate * 1000, key="datarefresh")
 # ============================================================
 active_users = get_active_user_count(timeout_seconds=90)
 
-# Ensure watchlist & portfolio are loaded into session state
-if "watchlist" not in st.session_state:
-    st.session_state.watchlist = load_watchlist()
-if "portfolio" not in st.session_state:
-    st.session_state.portfolio = load_portfolio()
 
 
 col_title, col_users = st.columns([5.5, 1])
@@ -1960,26 +1954,26 @@ with col_users:
 
 st.caption("Dark mode • Candlesticks • Pattern Recognition • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro • 15Y Historical • Predictive Analytics")
 
-tab_brief, tab_crypto, tab_compare, tab_macro, tab_predict, tab_analysis, tab_tools, tab_portfolio = st.tabs([
+tab_brief, tab_crypto, tab_compare, tab_macro, tab_predict, tab_analysis, tab_tools = st.tabs([
     "☀️ Briefing",
     "⚡ Crypto",
     "🔀 Compare",
     "🌐 Macro",
     "🔮 Predictive",
     "📊 Analysis",
-    "🛠️ Tools",
-    "⭐ Portfolio"
+    "🛠️ Tools"
 ])
 
 
+
 # ============================================================
-# BRIEFING TAB (daily command center — light + cached)
+# BRIEFING TAB (expanded daily command center)
 # ============================================================
 with tab_brief:
     st.subheader("☀️ Daily Briefing")
-    st.caption("One-screen snapshot. Heavy charts live in other tabs — this view reuses cached data.")
+    st.caption("Market pulse in one place — macro, movers, positioning, patterns, and headlines.")
 
-    # Light fetches (cached)
+    # ---- Cached light data ----
     try:
         fng_v, fng_c = get_fear_greed()
     except Exception:
@@ -1993,91 +1987,199 @@ with tab_brief:
     except Exception:
         defi_snap = {}
 
-    brief_data = {}
-    if tkrs:
-        brief_data = get_shared_market_data(tkrs, interval, lookback_bars, period, is_6h)
+    brief_data = get_shared_market_data(tkrs, interval, lookback_bars, period, is_6h) if tkrs else {}
 
-    # Alert preview
+    # Futures snapshot for briefing tickers
+    brief_fut = {}
+    for t, hist in (brief_data or {}).items():
+        if hist is not None and not hist.empty and "close" in hist.columns:
+            try:
+                cpx = float(hist["close"].iloc[-1])
+                brief_fut[t] = get_futures_metrics(t, current_price=cpx)
+            except Exception:
+                pass
+
+    # Patterns (if enabled)
+    brief_patterns = []
+    if show_patterns and brief_data:
+        for t, hist in list(brief_data.items())[:4]:
+            try:
+                for p in detect_all_patterns(hist)[:3]:
+                    brief_patterns.append({"ticker": t, **p})
+            except Exception:
+                pass
+
+    # Alerts
     brief_triggered = []
     if st.session_state.get("alerts") and brief_data:
         try:
-            temp_liq = {}
-            for t, hist in brief_data.items():
-                if not hist.empty and "close" in hist.columns:
-                    cpx = float(hist["close"].iloc[-1])
-                    fut = get_futures_metrics(t, current_price=cpx)
-                    temp_liq[t] = {"funding": fut.get("funding_rate")}
-            pats = {}
-            brief_triggered = check_alerts(st.session_state.alerts, brief_data, temp_liq, pats)
+            temp_liq = {t: {"funding": (brief_fut.get(t) or {}).get("funding_rate")} for t in brief_data}
+            brief_triggered = check_alerts(st.session_state.alerts, brief_data, temp_liq, {})
         except Exception:
             pass
 
-    # Top metrics row
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Fear & Greed", f"{fng_v}/100", fng_c)
+    # ===== ROW 1: Core regime metrics =====
+    st.markdown("### Market regime")
+    r1 = st.columns(6)
+    r1[0].metric("Fear & Greed", f"{fng_v}/100", fng_c)
     if "VIX" in macro_snap and not macro_snap["VIX"].empty:
-        vix = float(macro_snap["VIX"]["close"].iloc[-1])
-        m2.metric("VIX", f"{vix:.1f}")
+        r1[1].metric("VIX", f"{float(macro_snap['VIX']['close'].iloc[-1]):.1f}")
     else:
-        m2.metric("VIX", "N/A")
+        r1[1].metric("VIX", "—")
+    if "DXY (U.S. Dollar Index)" in macro_snap and not macro_snap["DXY (U.S. Dollar Index)"].empty:
+        dxy = macro_snap["DXY (U.S. Dollar Index)"]
+        dxy_p = float(dxy["close"].iloc[-1])
+        dxy_d = ((dxy_p / float(dxy["close"].iloc[-2])) - 1) * 100 if len(dxy) > 1 else 0
+        r1[2].metric("DXY", f"{dxy_p:.2f}", f"{dxy_d:+.2f}%")
+    else:
+        r1[2].metric("DXY", "—")
     if "U.S. 10Y Treasury Yield" in macro_snap and not macro_snap["U.S. 10Y Treasury Yield"].empty:
-        y10 = float(macro_snap["U.S. 10Y Treasury Yield"]["close"].iloc[-1])
-        m3.metric("US 10Y", f"{y10:.2f}%")
+        r1[3].metric("US 10Y", f"{float(macro_snap['U.S. 10Y Treasury Yield']['close'].iloc[-1]):.2f}%")
     else:
-        m3.metric("US 10Y", "N/A")
+        r1[3].metric("US 10Y", "—")
+    # 2s10s
+    try:
+        y2 = macro_snap.get("U.S. 2Y Yield")
+        y10 = macro_snap.get("U.S. 10Y Treasury Yield")
+        if y2 is not None and y10 is not None and not y2.empty and not y10.empty:
+            common = y2["close"].index.intersection(y10["close"].index)
+            sp = float(y10["close"].loc[common].iloc[-1] - y2["close"].loc[common].iloc[-1])
+            r1[4].metric("2s10s", f"{sp:.2f}", "Inverted" if sp < 0 else "Positive")
+        else:
+            r1[4].metric("2s10s", "—")
+    except Exception:
+        r1[4].metric("2s10s", "—")
     if defi_snap.get("total_tvl"):
-        m4.metric("Crypto TVL", f"${defi_snap['total_tvl']/1e9:.1f}B")
+        r1[5].metric("Crypto TVL", f"${defi_snap['total_tvl']/1e9:.1f}B")
     else:
-        m4.metric("Crypto TVL", "N/A")
+        r1[5].metric("Crypto TVL", "—")
+
+    # ===== ROW 2: Equity / commodity pulse =====
+    st.markdown("### Equities & commodities")
+    eq_cols = st.columns(5)
+    eq_map = [
+        ("S&P 500 Index", "S&P 500"),
+        ("NASDAQ 100 Index", "Nasdaq"),
+        ("Gold Futures", "Gold"),
+        ("Crude Oil Futures", "Oil"),
+        ("Bitcoin", "BTC"),
+    ]
+    for i, (key, label) in enumerate(eq_map):
+        if key in macro_snap and not macro_snap[key].empty:
+            df = macro_snap[key]
+            px = float(df["close"].iloc[-1])
+            ch = ((px / float(df["close"].iloc[-2])) - 1) * 100 if len(df) > 1 else 0
+            if "Yield" in key:
+                eq_cols[i].metric(label, f"{px:.2f}", f"{ch:+.2f}%")
+            else:
+                eq_cols[i].metric(label, f"${px:,.2f}" if px > 50 else f"{px:,.2f}", f"{ch:+.2f}%")
+        else:
+            eq_cols[i].metric(label, "—")
 
     st.markdown("---")
-    c_left, c_right = st.columns(2)
 
-    with c_left:
-        st.markdown("### 📈 Watchlist / Ticker Movers")
+    # ===== Movers + Positioning =====
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("### 📈 Session movers")
         if not brief_data:
-            st.info("Add tickers in the sidebar to see movers here.")
+            st.info("Add tickers in the sidebar to populate movers.")
         else:
             rows = []
             for t, df in brief_data.items():
                 if df is None or len(df) < 2 or "close" not in df.columns:
                     continue
                 px = float(df["close"].iloc[-1])
-                ch = (px / float(df["close"].iloc[-2]) - 1) * 100
+                ch1 = (px / float(df["close"].iloc[-2]) - 1) * 100
+                ch5 = (px / float(df["close"].iloc[-6]) - 1) * 100 if len(df) > 6 else None
                 rsi = df["rsi"].iloc[-1] if "rsi" in df.columns else None
                 rows.append({
                     "Ticker": t,
                     "Price": f"${px:,.2f}",
-                    "Change": f"{ch:+.2f}%",
+                    "1-bar": f"{ch1:+.2f}%",
+                    "5-bar": f"{ch5:+.2f}%" if ch5 is not None else "—",
                     "RSI": f"{float(rsi):.0f}" if rsi is not None and pd.notna(rsi) else "—",
                 })
-            rows = sorted(rows, key=lambda r: float(r["Change"].replace("%","")), reverse=True)
-            if rows:
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-            else:
-                st.caption("No mover data yet.")
+            rows = sorted(rows, key=lambda r: float(r["1-bar"].replace("%", "")), reverse=True)
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-    with c_right:
-        st.markdown("### 🔔 Alerts & Pulse")
+    with c2:
+        st.markdown("### ⚖️ Futures positioning")
+        if not brief_fut:
+            st.caption("No futures metrics loaded.")
+        else:
+            frows = []
+            for t, fut in brief_fut.items():
+                frows.append({
+                    "Ticker": t,
+                    "Long %": f"{fut.get('long_pct', 50):.0f}%",
+                    "Short %": f"{fut.get('short_pct', 50):.0f}%",
+                    "Funding": f"{fut['funding_rate']:+.4f}%" if fut.get("funding_rate") is not None else "—",
+                })
+            st.dataframe(pd.DataFrame(frows), use_container_width=True, hide_index=True)
+        if defi_snap.get("stablecoin_mcap"):
+            st.metric("Stablecoin supply (approx)", f"${defi_snap['stablecoin_mcap']/1e9:.1f}B")
+
+    # ===== Patterns + Alerts =====
+    c3, c4 = st.columns(2)
+    with c3:
+        st.markdown("### 🔎 Pattern signals")
+        if not show_patterns:
+            st.caption("Enable **Chart Pattern Recognition** in the sidebar to populate this.")
+        elif not brief_patterns:
+            st.caption("No notable patterns on loaded tickers.")
+        else:
+            for p in brief_patterns[:8]:
+                st.markdown(f"- **{p['ticker']}**: {p['type']} ({p['direction']}) @ {p.get('price', 0):,.2f}")
+
+    with c4:
+        st.markdown("### 🔔 Alerts")
         if brief_triggered:
             for msg in brief_triggered:
                 st.warning(msg)
         else:
-            st.success("No active alert conditions firing right now.")
-        st.markdown("**Quick links**")
-        st.caption("Use the tabs above → Crypto for charts · Compare for head-to-head · Macro for yields/FRED · Portfolio for P&L.")
+            st.success("No alert rules firing right now.")
+        n_alerts = len(st.session_state.get("alerts") or [])
+        st.caption(f"{n_alerts} alert rule(s) configured in the sidebar.")
 
-    # Mini news
-    st.markdown("### 📰 Latest Headlines")
+    # ===== Technical strip =====
+    if brief_data:
+        st.markdown("### Technical snapshot")
+        trows = []
+        for t, df in brief_data.items():
+            if df is None or df.empty:
+                continue
+            last = df.iloc[-1]
+            trows.append({
+                "Ticker": t,
+                "RSI": f"{last['rsi']:.0f}" if "rsi" in df.columns and pd.notna(last.get("rsi")) else "—",
+                "MACD hist": f"{last['macd_hist']:.2f}" if "macd_hist" in df.columns and pd.notna(last.get("macd_hist")) else "—",
+                "vs SMA50": (
+                    "Above" if "sma50" in df.columns and pd.notna(last.get("sma50")) and last["close"] > last["sma50"]
+                    else "Below" if "sma50" in df.columns and pd.notna(last.get("sma50")) else "—"
+                ),
+                "ATR %": (
+                    f"{(last['atr']/last['close']*100):.2f}%"
+                    if "atr" in df.columns and pd.notna(last.get("atr")) and last["close"]
+                    else "—"
+                ),
+            })
+        if trows:
+            st.dataframe(pd.DataFrame(trows), use_container_width=True, hide_index=True)
+
+    # ===== News =====
+    st.markdown("### 📰 Headlines")
     try:
         news = get_crypto_news(cache_buster=pd.Timestamp.now().strftime("%Y-%m-%d %H"))
         if news:
-            for art in news[:5]:
-                st.markdown(f"- **{art['source']}**: [{art['title']}]({art['link']})")
+            for art in news[:8]:
+                st.markdown(f"- **{art['source']}** · {art.get('published', '')} — [{art['title']}]({art['link']})")
         else:
-            st.caption("News feed quiet right now.")
+            st.caption("No headlines available.")
     except Exception:
-        st.caption("News unavailable.")
+        st.caption("News feed unavailable.")
+
+    st.caption("Charts & deep dives → **Crypto** · Head-to-head → **Compare** · Yields/FRED → **Macro**")
 
 
 # ============================================================
@@ -2963,16 +3065,6 @@ with tab_tools:
                     mime="text/csv"
                 )
             
-            # Portfolio export
-            if st.session_state.get("portfolio"):
-                pf_df = pd.DataFrame(st.session_state.portfolio)
-                st.download_button(
-                    "Download Portfolio CSV",
-                    data=dataframe_to_csv_bytes(pf_df),
-                    file_name="portfolio.csv",
-                    mime="text/csv"
-                )
-            
             # Alerts export
             if st.session_state.get("alerts"):
                 al_df = pd.DataFrame(st.session_state.alerts)
@@ -3022,139 +3114,6 @@ with tab_tools:
             except Exception:
                 pass
 
-
-
-# ============================================================
-# WATCHLIST & PORTFOLIO TAB
-# ============================================================
-with tab_portfolio:
-    st.subheader("⭐ Watchlist & 💼 Portfolio")
-    st.caption("Independent of the chart tickers. Portfolio fetches its own live prices.")
-
-    col_wl, col_pf = st.columns(2)
-
-    # ===================== WATCHLIST =====================
-    with col_wl:
-        st.markdown("### ⭐ Watchlist")
-        
-        wl_input = st.text_input("Add ticker to Watchlist", placeholder="e.g. BTC-USD or ETH", key="wl_add_input")
-        if st.button("➕ Add to Watchlist", key="wl_add_btn") and wl_input.strip():
-            t = wl_input.strip().upper()
-            if not t.endswith("-USD") and "-" not in t and t.isalpha():
-                t = t + "-USD"
-            if t not in st.session_state.watchlist:
-                st.session_state.watchlist.append(t)
-                save_watchlist(st.session_state.watchlist)
-                st.success(f"Added {t}")
-                st.rerun()
-            else:
-                st.info(f"{t} is already in the watchlist")
-
-        if st.session_state.watchlist:
-            st.write("**Your Watchlist:**")
-            for i, t in enumerate(list(st.session_state.watchlist)):
-                c1, c2 = st.columns([4, 1])
-                c1.write(f"• {t}")
-                if c2.button("🗑️", key=f"wl_del_{i}"):
-                    st.session_state.watchlist.pop(i)
-                    save_watchlist(st.session_state.watchlist)
-                    st.rerun()
-
-            st.markdown("---")
-            if st.button("🚀 Use Watchlist as Chart Tickers", type="primary"):
-                st.session_state.main_tickers_value = ", ".join(st.session_state.watchlist)
-                st.success("Watchlist applied to chart tickers! Switch to the Crypto tab to see them.")
-                st.rerun()
-        else:
-            st.info("Watchlist is empty. Add some tickers above.")
-
-    # ===================== PORTFOLIO =====================
-    with col_pf:
-        st.markdown("### 💼 Portfolio")
-        
-        with st.expander("➕ Add Holding", expanded=False):
-            p_ticker = st.text_input("Ticker", placeholder="BTC-USD", key="pf_ticker")
-            p_qty = st.number_input("Quantity", min_value=0.0, value=0.0, step=0.01, key="pf_qty")
-            p_entry = st.number_input("Entry Price ($)", min_value=0.0, value=0.0, step=1.0, key="pf_entry")
-            if st.button("Add Holding", key="pf_add_btn") and p_ticker.strip() and p_qty > 0 and p_entry > 0:
-                t = p_ticker.strip().upper()
-                if not t.endswith("-USD") and "-" not in t and t.isalpha():
-                    t = t + "-USD"
-                st.session_state.portfolio.append({
-                    "ticker": t,
-                    "qty": float(p_qty),
-                    "entry_price": float(p_entry)
-                })
-                save_portfolio(st.session_state.portfolio)
-                st.success(f"Added {p_qty} {t} @ ${p_entry:,.2f}")
-                st.rerun()
-
-        if not st.session_state.portfolio:
-            st.info("Portfolio is empty. Add a holding above.")
-        else:
-            # Independently fetch current prices for portfolio tickers
-            pf_tickers = list({h["ticker"] for h in st.session_state.portfolio})
-            try:
-                pf_data = load_ticker_data(tuple(pf_tickers), "1d", 5, "5d", False)
-            except Exception:
-                pf_data = {}
-
-            rows = []
-            total_cost = 0.0
-            total_value = 0.0
-
-            for i, h in enumerate(st.session_state.portfolio):
-                t = h["ticker"]
-                qty = float(h["qty"])
-                entry = float(h["entry_price"])
-                cost = qty * entry
-                total_cost += cost
-
-                current = None
-                if t in pf_data and not pf_data[t].empty and "close" in pf_data[t].columns:
-                    current = float(pf_data[t]["close"].iloc[-1])
-
-                if current is not None:
-                    value = qty * current
-                    pnl = value - cost
-                    pnl_pct = (pnl / cost * 100) if cost > 0 else 0.0
-                    total_value += value
-                    rows.append({
-                        "Ticker": t,
-                        "Qty": qty,
-                        "Entry": f"${entry:,.2f}",
-                        "Current": f"${current:,.2f}",
-                        "Value": f"${value:,.2f}",
-                        "P&L $": f"${pnl:+,.2f}",
-                        "P&L %": f"{pnl_pct:+.2f}%",
-                    })
-                else:
-                    rows.append({
-                        "Ticker": t,
-                        "Qty": qty,
-                        "Entry": f"${entry:,.2f}",
-                        "Current": "N/A",
-                        "Value": "N/A",
-                        "P&L $": "N/A",
-                        "P&L %": "N/A",
-                    })
-
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-            if total_cost > 0 and total_value > 0:
-                total_pnl = total_value - total_cost
-                total_pnl_pct = (total_pnl / total_cost) * 100
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Total Cost", f"${total_cost:,.2f}")
-                m2.metric("Current Value", f"${total_value:,.2f}")
-                m3.metric("Total P&L", f"${total_pnl:+,.2f}", f"{total_pnl_pct:+.2f}%")
-
-            st.markdown("**Remove holdings:**")
-            for i, h in enumerate(list(st.session_state.portfolio)):
-                if st.button(f"Remove {h['qty']} {h['ticker']}", key=f"pf_rm_{i}"):
-                    st.session_state.portfolio.pop(i)
-                    save_portfolio(st.session_state.portfolio)
-                    st.rerun()
 
 
 st.sidebar.success(f"Last refresh: {pd.Timestamp.now().strftime('%H:%M:%S')}")
