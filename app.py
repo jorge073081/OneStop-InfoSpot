@@ -23,7 +23,7 @@ nltk.download("vader_lexicon", quiet=True)
 st.set_page_config(
     page_title="OneStop-InfoSpot | Asset Intelligence Terminal",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 st.markdown(
@@ -120,22 +120,83 @@ st.markdown(
         }
 
         /* ===== MOBILE RESPONSIVE ===== */
+        /* Horizontal scroll for tab bar */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 0.25rem;
+            overflow-x: auto;
+            flex-wrap: nowrap !important;
+            scrollbar-width: thin;
+        }
+        .stTabs [data-baseweb="tab"] {
+            white-space: nowrap;
+        }
+
         @media (max-width: 768px) {
-            .silver-title { font-size: 1.85rem !important; letter-spacing: 0.5px; }
-            .silver-subtitle { font-size: 1rem !important; margin-bottom: 0.5rem; }
-            .block-container {
-                padding-top: 0.6rem !important;
-                padding-left: 0.6rem !important;
-                padding-right: 0.6rem !important;
+            .silver-title {
+                font-size: 1.7rem !important;
+                letter-spacing: 0.3px;
+                margin-top: 0.2rem !important;
             }
-            [data-testid="stMetricValue"] { font-size: 1.1rem !important; }
-            [data-testid="stMetricLabel"] { font-size: 0.75rem !important; }
-            .stTabs [data-baseweb="tab"] { font-size: 0.8rem !important; padding: 0.4rem 0.5rem !important; }
+            .silver-subtitle {
+                font-size: 0.95rem !important;
+                margin-bottom: 0.4rem !important;
+            }
+            .block-container {
+                padding-top: 0.5rem !important;
+                padding-left: 0.55rem !important;
+                padding-right: 0.55rem !important;
+                padding-bottom: 4rem !important;
+            }
+            /* Metrics denser on phones */
+            [data-testid="stMetricValue"] { font-size: 1.05rem !important; }
+            [data-testid="stMetricLabel"] { font-size: 0.7rem !important; }
+            [data-testid="metric-container"] {
+                padding: 0.35rem 0.4rem !important;
+            }
+            /* Tabs: smaller, scrollable */
+            .stTabs [data-baseweb="tab"] {
+                font-size: 0.78rem !important;
+                padding: 0.45rem 0.55rem !important;
+            }
+            /* Full-width buttons */
+            .stButton > button, .stDownloadButton > button {
+                width: 100%;
+                min-height: 2.75rem;
+            }
+            /* Dataframes: allow sideways scroll */
+            [data-testid="stDataFrame"],
+            [data-testid="stTable"] {
+                max-width: 100%;
+                overflow-x: auto !important;
+            }
+            /* Plotly charts: slightly shorter on mobile */
+            .js-plotly-plot, .plotly {
+                max-width: 100% !important;
+            }
+            /* Sidebar tighter */
+            section[data-testid="stSidebar"] .block-container {
+                padding-top: 1rem !important;
+            }
+            /* Expanders easier to tap */
+            .streamlit-expanderHeader {
+                font-size: 0.95rem !important;
+                min-height: 2.5rem;
+            }
+            /* Reduce huge top gaps */
+            h2, h3 {
+                font-size: 1.15rem !important;
+                margin-top: 0.4rem !important;
+            }
         }
 
         @media (max-width: 480px) {
-            .silver-title { font-size: 1.5rem !important; }
-            .silver-subtitle { font-size: 0.9rem !important; }
+            .silver-title { font-size: 1.4rem !important; }
+            .silver-subtitle { font-size: 0.85rem !important; }
+            .stTabs [data-baseweb="tab"] {
+                font-size: 0.72rem !important;
+                padding: 0.4rem 0.45rem !important;
+            }
+            [data-testid="stMetricValue"] { font-size: 0.95rem !important; }
         }
     </style>
     """,
@@ -1669,12 +1730,13 @@ active_users = get_active_user_count(timeout_seconds=90)
 
 
 
-col_title, col_users = st.columns([5.5, 1])
+# Title — active users sit under subtitle on narrow layouts via simple stack
+col_title, col_users = st.columns([4, 1.2])
 with col_title:
     st.markdown('<div class="silver-title">OneStop-InfoSpot</div>', unsafe_allow_html=True)
     st.markdown('<div class="silver-subtitle">Asset Intelligence Terminal</div>', unsafe_allow_html=True)
 with col_users:
-    st.metric("🟢 Active Users", active_users)
+    st.metric("🟢 Users", active_users)
 
 st.caption("Dark mode • Candlesticks • Pattern Recognition • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro • 15Y Historical • Predictive Analytics")
 
