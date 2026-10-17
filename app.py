@@ -508,6 +508,66 @@ def dataframe_to_csv_bytes(df: pd.DataFrame) -> bytes:
     df.to_csv(buf, index=True)
     return buf.getvalue().encode()
 
+
+# ============================================================
+# FRED MACRO DATA (optional free API key from https://fred.stlouisfed.org/docs/api/api_key.html)
+# ============================================================
+FRED_SERIES = {
+    "CPI (All Urban Consumers)": "CPIAUCSL",
+    "Fed Funds Effective Rate": "FEDFUNDS",
+    "M2 Money Supply": "M2SL",
+    "Unemployment Rate": "UNRATE",
+    "10Y Real Yield (TIPS)": "DFII10",
+    "Industrial Production": "INDPRO",
+}
+
+@st.cache_data(ttl=86400, show_spinner="Fetching FRED macro series...")
+def load_fred_series(api_key: str, series_id: str, limit: int = 120) -> Optional[pd.DataFrame]:
+    """Pull a single FRED series. Returns DataFrame with date index and 'value' column."""
+    if not api_key or not api_key.strip():
+        return None
+    try:
+        url = (
+            f"https://api.stlouisfed.org/fred/series/observations"
+            f"?series_id={series_id}&api_key={api_key.strip()}&file_type=json"
+            f"&sort_order=desc&limit={limit}"
+        )
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        obs = data.get("observations") or []
+        if not obs:
+            return None
+        rows = []
+        for o in obs:
+            try:
+                val = float(o["value"])
+                rows.append({"date": o["date"], "value": val})
+            except (ValueError, TypeError, KeyError):
+                continue
+        if not rows:
+            return None
+        df = pd.DataFrame(rows)
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values("date").set_index("date")
+        return df
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=86400, show_spinner="Loading FRED dashboard...")
+def load_fred_dashboard(api_key: str) -> Dict[str, pd.DataFrame]:
+    """Load all configured FRED series. Empty dict if no key or all fail."""
+    if not api_key or not str(api_key).strip():
+        return {}
+    out = {}
+    for label, sid in FRED_SERIES.items():
+        df = load_fred_series(api_key, sid)
+        if df is not None and not df.empty:
+            out[label] = df
+    return out
+
 # ============================================================
 # 3. ADVANCED TECHNICAL INDICATORS ALGORITHMS
 # ============================================================
@@ -1667,6 +1727,25 @@ if st.session_state.alerts:
             st.rerun()
 else:
     st.sidebar.caption("No active alerts")
+
+st.sidebar.subheader("🔑 Optional API Keys")
+fred_key_default = ""
+try:
+    fred_key_default = st.secrets.get("fred_api_key", "") or ""
+except Exception:
+    pass
+fred_api_key = st.sidebar.text_input(
+    "FRED API Key (free)",
+    value=fred_key_default,
+    type="password",
+    help="Get a free key at https://fred.stlouisfed.org/docs/api/api_key.html — unlocks CPI, Fed Funds, M2, Unemployment, etc.",
+    key="fred_key_input"
+)
+if fred_api_key:
+    st.sidebar.caption("FRED key loaded ✓")
+else:
+    st.sidebar.caption("Without a FRED key, built-in Yahoo macro still works.")
+
 res_cfg = RESOLUTION_MAP[res_disp]
 interval = res_cfg["interval"]
 lookback_bars = res_cfg["lookback"]
@@ -2041,6 +2120,70 @@ with tab_macro:
                 font=dict(family="Outfit, sans-serif")
             )
             st.plotly_chart(fig_macro, use_container_width=True)
+
+
+    # ----- FRED Official Macro Series -----
+    st.markdown("---")
+    st.markdown("#### 🏛️ FRED Official Macro Series")
+    st.caption("Federal Reserve Economic Data — free with your API key. Series cached 24h.")
+    
+    if not fred_api_key or not str(fred_api_key).strip():
+        st.info(
+            "Add a **free FRED API key** in the sidebar to unlock CPI, Fed Funds, M2, Unemployment, "
+            "and more. Get one in ~1 minute at [fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/api_key.html)."
+        )
+    else:
+        fred_data = load_fred_dashboard(fred_api_key)
+        if not fred_data:
+            st.warning("FRED key present but no series loaded. Check the key or try again later.")
+        else:
+            fcols = st.columns(3)
+            fi = 0
+            for label, fdf in fred_data.items():
+                if fdf is None or fdf.empty:
+                    continue
+                last = float(fdf["value"].iloc[-1])
+                prev = float(fdf["value"].iloc[-2]) if len(fdf) > 1 else last
+                delta = last - prev
+                # Format by series type
+                if "Rate" in label or "Unemployment" in label or "Yield" in label or "Funds" in label:
+                    disp = f"{last:.2f}%"
+                    d_disp = f"{delta:+.2f}"
+                elif "M2" in label or "Production" in label:
+                    disp = f"{last:,.1f}"
+                    d_disp = f"{delta:+,.1f}"
+                else:
+                    disp = f"{last:,.2f}"
+                    d_disp = f"{delta:+.2f}"
+                fcols[fi % 3].metric(label, disp, d_disp)
+                fi += 1
+            
+            # Small charts for key series
+            chart_labels = [l for l in ["CPI (All Urban Consumers)", "Fed Funds Effective Rate", 
+                                         "Unemployment Rate", "M2 Money Supply"] if l in fred_data]
+            if chart_labels:
+                n = len(chart_labels)
+                ccols = st.columns(min(2, n))
+                for i, label in enumerate(chart_labels):
+                    fdf = fred_data[label]
+                    with ccols[i % 2]:
+                        fig_f = go.Figure()
+                        fig_f.add_trace(go.Scatter(
+                            x=fdf.index, y=fdf["value"],
+                            name=label, line=dict(width=2, color="#00BFFF")
+                        ))
+                        fig_f.update_layout(
+                            title=label,
+                            height=260,
+                            template="plotly_dark",
+                            paper_bgcolor="#0e1117",
+                            plot_bgcolor="#0e1117",
+                            margin=dict(l=10, r=10, t=40, b=10),
+                            font=dict(family="Outfit, sans-serif"),
+                            showlegend=False,
+                        )
+                        st.plotly_chart(fig_f, use_container_width=True)
+
 
     # DeFi / Stablecoin layer
     st.markdown("---")
