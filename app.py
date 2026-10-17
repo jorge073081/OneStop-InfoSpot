@@ -229,20 +229,23 @@ PORTFOLIO_FILE = "user_portfolio.json"
 def load_json_file(path: str, default=None):
     if default is None:
         default = []
-    if os.path.exists(path):
-        try:
+    try:
+        if os.path.exists(path):
             with open(path, "r") as f:
-                return json.load(f)
-        except Exception:
-            return default
+                data = json.load(f)
+                return data if data is not None else default
+    except Exception:
+        pass
     return default
 
 def save_json_file(path: str, data):
+    """Try to persist to disk. On Streamlit Cloud this may be ephemeral."""
     try:
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
+        return True
     except Exception:
-        pass
+        return False
 
 def load_watchlist() -> list:
     return load_json_file(WATCHLIST_FILE, [])
@@ -1507,38 +1510,22 @@ def build_asset_chart(
 # ============================================================
 st.sidebar.header("Controls")
 
-# --- WATCHLIST ---
-st.sidebar.subheader("⭐ Watchlist")
-if "watchlist" not in st.session_state:
-    st.session_state.watchlist = load_watchlist()
+# --- MAIN TICKER INPUT (session-state driven so Watchlist can update it) ---
+if "main_tickers_value" not in st.session_state:
+    st.session_state.main_tickers_value = "BTC-USD, ETH-USD, SOL-USD, XRP-USD"
 
-wl_input = st.sidebar.text_input("Add to Watchlist (ticker)", placeholder="e.g. BTC-USD")
-if st.sidebar.button("➕ Add to Watchlist") and wl_input.strip():
-    t = wl_input.strip().upper()
-    if not t.endswith("-USD") and t.isalpha():
-        t = t + "-USD"
-    if t not in st.session_state.watchlist:
-        st.session_state.watchlist.append(t)
-        save_watchlist(st.session_state.watchlist)
-        st.sidebar.success(f"Added {t}")
+t_raw = st.sidebar.text_input(
+    "Enter Tickers (commas):",
+    value=st.session_state.main_tickers_value,
+    key="main_tickers_input"
+)
+# Keep session state in sync when user types
+if t_raw != st.session_state.main_tickers_value:
+    st.session_state.main_tickers_value = t_raw
 
-if st.session_state.watchlist:
-    st.sidebar.write("**Your Watchlist:**")
-    for i, t in enumerate(st.session_state.watchlist):
-        cols = st.sidebar.columns([3, 1])
-        cols[0].write(t)
-        if cols[1].button("x", key=f"rm_wl_{i}"):
-            st.session_state.watchlist.pop(i)
-            save_watchlist(st.session_state.watchlist)
-            st.rerun()
-    if st.sidebar.button("Use Watchlist as Tickers"):
-        t_raw = ", ".join(st.session_state.watchlist)
-else:
-    st.sidebar.caption("No tickers in watchlist yet.")
+tkrs = [t.strip().upper() for t in st.session_state.main_tickers_value.split(",") if t.strip()]
 
-# --- MAIN TICKER INPUT ---
-t_raw = st.sidebar.text_input("Enter Tickers (commas):", value="BTC-USD, ETH-USD, SOL-USD, XRP-USD", key="main_tickers")
-tkrs = [t.strip().upper() for t in t_raw.split(",") if t.strip()]
+st.sidebar.caption("⭐ Manage Watchlist & 💼 Portfolio in the **Watchlist & Portfolio** tab")
 res_disp = st.sidebar.selectbox("Resolution", list(RESOLUTION_MAP.keys()))
 rf_rate = st.sidebar.slider("Refresh Rate (Seconds)", 15, 120, 45)
 
@@ -1564,32 +1551,6 @@ show_vwap = st.sidebar.checkbox("VWAP", value=False)
 show_vs_btc = st.sidebar.checkbox("Relative Strength vs BTC", value=False)
 show_onchain = st.sidebar.checkbox("Show On-chain Metrics", value=True)
 
-# --- PORTFOLIO ---
-st.sidebar.subheader("💼 Simple Portfolio")
-if "portfolio" not in st.session_state:
-    st.session_state.portfolio = load_portfolio()
-
-with st.sidebar.expander("Add Holding"):
-    p_ticker = st.text_input("Ticker", placeholder="BTC-USD", key="p_ticker")
-    p_qty = st.number_input("Quantity", min_value=0.0, value=0.0, step=0.01, key="p_qty")
-    p_entry = st.number_input("Entry Price ($)", min_value=0.0, value=0.0, step=0.01, key="p_entry")
-    if st.button("Add to Portfolio") and p_ticker and p_qty > 0 and p_entry > 0:
-        t = p_ticker.strip().upper()
-        if not t.endswith("-USD") and t.isalpha():
-            t = t + "-USD"
-        st.session_state.portfolio.append({"ticker": t, "qty": p_qty, "entry_price": p_entry})
-        save_portfolio(st.session_state.portfolio)
-        st.success(f"Added {p_qty} {t}")
-        st.rerun()
-
-if st.session_state.portfolio:
-    st.sidebar.write("**Holdings:**")
-    for i, h in enumerate(st.session_state.portfolio):
-        st.sidebar.caption(f"{h['qty']} {h['ticker']} @ ${h['entry_price']:,.2f}")
-        if st.sidebar.button(f"Remove {h['ticker']}", key=f"rm_pf_{i}"):
-            st.session_state.portfolio.pop(i)
-            save_portfolio(st.session_state.portfolio)
-            st.rerun()
 
 # --- ALERTS ---
 st.sidebar.subheader("🔔 Alerts")
@@ -1652,6 +1613,13 @@ st_autorefresh(interval=rf_rate * 1000, key="datarefresh")
 # ============================================================
 active_users = get_active_user_count(timeout_seconds=90)
 
+# Ensure watchlist & portfolio are loaded into session state
+if "watchlist" not in st.session_state:
+    st.session_state.watchlist = load_watchlist()
+if "portfolio" not in st.session_state:
+    st.session_state.portfolio = load_portfolio()
+
+
 col_title, col_users = st.columns([5.5, 1])
 with col_title:
     st.markdown('<div class="silver-title">OneStop-InfoSpot</div>', unsafe_allow_html=True)
@@ -1661,12 +1629,13 @@ with col_users:
 
 st.caption("Dark mode • Candlesticks • Pattern Recognition • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro • 15Y Historical • Predictive Analytics")
 
-tab_crypto, tab_macro, tab_predict, tab_analysis, tab_tools = st.tabs([
+tab_crypto, tab_macro, tab_predict, tab_analysis, tab_tools, tab_portfolio = st.tabs([
     "⚡ Crypto Intelligence Terminal",
     "🌐 Global Macro Insights",
     "🔮 Predictive Analytics",
     "📊 Analysis Tools",
-    "🛠️ Backtest & Tools"
+    "🛠️ Backtest & Tools",
+    "⭐ Watchlist & Portfolio"
 ])
 
 with tab_crypto:
@@ -1785,55 +1754,6 @@ with tab_crypto:
                                   font=dict(family="Playfair Display, serif"))
                 st.plotly_chart(fig, use_container_width=True)
             
-            # ========== PORTFOLIO SUMMARY ==========
-            if st.session_state.get("portfolio"):
-                st.subheader("💼 Portfolio Performance")
-                pf_rows = []
-                total_cost = 0.0
-                total_value = 0.0
-                for h in st.session_state.portfolio:
-                    t = h["ticker"]
-                    qty = float(h["qty"])
-                    entry = float(h["entry_price"])
-                    cost = qty * entry
-                    total_cost += cost
-                    current = None
-                    if t in data and not data[t].empty and "close" in data[t].columns:
-                        current = float(data[t]["close"].iloc[-1])
-                    if current is not None:
-                        value = qty * current
-                        pnl = value - cost
-                        pnl_pct = (pnl / cost) * 100 if cost > 0 else 0
-                        total_value += value
-                        pf_rows.append({
-                            "Ticker": t,
-                            "Qty": qty,
-                            "Entry": f"${entry:,.2f}",
-                            "Current": f"${current:,.2f}",
-                            "Value": f"${value:,.2f}",
-                            "P&L": f"${pnl:+,.2f}",
-                            "P&L %": f"{pnl_pct:+.2f}%",
-                        })
-                    else:
-                        pf_rows.append({
-                            "Ticker": t,
-                            "Qty": qty,
-                            "Entry": f"${entry:,.2f}",
-                            "Current": "N/A",
-                            "Value": "N/A",
-                            "P&L": "N/A",
-                            "P&L %": "N/A",
-                        })
-                if pf_rows:
-                    st.dataframe(pd.DataFrame(pf_rows), use_container_width=True, hide_index=True)
-                    if total_cost > 0 and total_value > 0:
-                        total_pnl = total_value - total_cost
-                        total_pnl_pct = (total_pnl / total_cost) * 100
-                        c1, c2, c3 = st.columns(3)
-                        c1.metric("Total Cost", f"${total_cost:,.2f}")
-                        c2.metric("Current Value", f"${total_value:,.2f}")
-                        c3.metric("Total P&L", f"${total_pnl:+,.2f}", f"{total_pnl_pct:+.2f}%")
-
             st.subheader("🔥 Asset Analysis Frameworks")
             m_tgt = st.selectbox("Select Target Asset:", list(liquidity_profiles.keys()))
             if m_tgt and m_tgt in data:
@@ -2451,6 +2371,140 @@ with tab_tools:
                 )
             
             st.success("Use the buttons above to download CSV files.")
+
+
+
+# ============================================================
+# WATCHLIST & PORTFOLIO TAB
+# ============================================================
+with tab_portfolio:
+    st.subheader("⭐ Watchlist & 💼 Portfolio")
+    st.caption("Independent of the chart tickers. Portfolio fetches its own live prices.")
+
+    col_wl, col_pf = st.columns(2)
+
+    # ===================== WATCHLIST =====================
+    with col_wl:
+        st.markdown("### ⭐ Watchlist")
+        
+        wl_input = st.text_input("Add ticker to Watchlist", placeholder="e.g. BTC-USD or ETH", key="wl_add_input")
+        if st.button("➕ Add to Watchlist", key="wl_add_btn") and wl_input.strip():
+            t = wl_input.strip().upper()
+            if not t.endswith("-USD") and "-" not in t and t.isalpha():
+                t = t + "-USD"
+            if t not in st.session_state.watchlist:
+                st.session_state.watchlist.append(t)
+                save_watchlist(st.session_state.watchlist)
+                st.success(f"Added {t}")
+                st.rerun()
+            else:
+                st.info(f"{t} is already in the watchlist")
+
+        if st.session_state.watchlist:
+            st.write("**Your Watchlist:**")
+            for i, t in enumerate(list(st.session_state.watchlist)):
+                c1, c2 = st.columns([4, 1])
+                c1.write(f"• {t}")
+                if c2.button("🗑️", key=f"wl_del_{i}"):
+                    st.session_state.watchlist.pop(i)
+                    save_watchlist(st.session_state.watchlist)
+                    st.rerun()
+
+            st.markdown("---")
+            if st.button("🚀 Use Watchlist as Chart Tickers", type="primary"):
+                st.session_state.main_tickers_value = ", ".join(st.session_state.watchlist)
+                st.success("Watchlist applied to chart tickers! Switch to the Crypto tab to see them.")
+                st.rerun()
+        else:
+            st.info("Watchlist is empty. Add some tickers above.")
+
+    # ===================== PORTFOLIO =====================
+    with col_pf:
+        st.markdown("### 💼 Portfolio")
+        
+        with st.expander("➕ Add Holding", expanded=False):
+            p_ticker = st.text_input("Ticker", placeholder="BTC-USD", key="pf_ticker")
+            p_qty = st.number_input("Quantity", min_value=0.0, value=0.0, step=0.01, key="pf_qty")
+            p_entry = st.number_input("Entry Price ($)", min_value=0.0, value=0.0, step=1.0, key="pf_entry")
+            if st.button("Add Holding", key="pf_add_btn") and p_ticker.strip() and p_qty > 0 and p_entry > 0:
+                t = p_ticker.strip().upper()
+                if not t.endswith("-USD") and "-" not in t and t.isalpha():
+                    t = t + "-USD"
+                st.session_state.portfolio.append({
+                    "ticker": t,
+                    "qty": float(p_qty),
+                    "entry_price": float(p_entry)
+                })
+                save_portfolio(st.session_state.portfolio)
+                st.success(f"Added {p_qty} {t} @ ${p_entry:,.2f}")
+                st.rerun()
+
+        if not st.session_state.portfolio:
+            st.info("Portfolio is empty. Add a holding above.")
+        else:
+            # Independently fetch current prices for portfolio tickers
+            pf_tickers = list({h["ticker"] for h in st.session_state.portfolio})
+            try:
+                pf_data = load_ticker_data(tuple(pf_tickers), "1d", 5, "5d", False)
+            except Exception:
+                pf_data = {}
+
+            rows = []
+            total_cost = 0.0
+            total_value = 0.0
+
+            for i, h in enumerate(st.session_state.portfolio):
+                t = h["ticker"]
+                qty = float(h["qty"])
+                entry = float(h["entry_price"])
+                cost = qty * entry
+                total_cost += cost
+
+                current = None
+                if t in pf_data and not pf_data[t].empty and "close" in pf_data[t].columns:
+                    current = float(pf_data[t]["close"].iloc[-1])
+
+                if current is not None:
+                    value = qty * current
+                    pnl = value - cost
+                    pnl_pct = (pnl / cost * 100) if cost > 0 else 0.0
+                    total_value += value
+                    rows.append({
+                        "Ticker": t,
+                        "Qty": qty,
+                        "Entry": f"${entry:,.2f}",
+                        "Current": f"${current:,.2f}",
+                        "Value": f"${value:,.2f}",
+                        "P&L $": f"${pnl:+,.2f}",
+                        "P&L %": f"{pnl_pct:+.2f}%",
+                    })
+                else:
+                    rows.append({
+                        "Ticker": t,
+                        "Qty": qty,
+                        "Entry": f"${entry:,.2f}",
+                        "Current": "N/A",
+                        "Value": "N/A",
+                        "P&L $": "N/A",
+                        "P&L %": "N/A",
+                    })
+
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+            if total_cost > 0 and total_value > 0:
+                total_pnl = total_value - total_cost
+                total_pnl_pct = (total_pnl / total_cost) * 100
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Total Cost", f"${total_cost:,.2f}")
+                m2.metric("Current Value", f"${total_value:,.2f}")
+                m3.metric("Total P&L", f"${total_pnl:+,.2f}", f"{total_pnl_pct:+.2f}%")
+
+            st.markdown("**Remove holdings:**")
+            for i, h in enumerate(list(st.session_state.portfolio)):
+                if st.button(f"Remove {h['qty']} {h['ticker']}", key=f"pf_rm_{i}"):
+                    st.session_state.portfolio.pop(i)
+                    save_portfolio(st.session_state.portfolio)
+                    st.rerun()
 
 
 st.sidebar.success(f"Last refresh: {pd.Timestamp.now().strftime('%H:%M:%S')}")
