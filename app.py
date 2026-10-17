@@ -13,6 +13,7 @@ import io
 import time
 import uuid
 from typing import Dict, List, Optional, Tuple, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ============================================================
 # 1. INITIAL SETUP & MATRIX INTERFACE STYLE SYSTEM
@@ -27,111 +28,114 @@ st.set_page_config(
 
 st.markdown(
     """
-    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        /* ===== GEOMETRIC SANS-SERIF EVERYWHERE ===== */
         html, body, .stApp, p, label, .stMarkdown p, .stCaption, 
         h1, h2, h3, h4, h5, h6,
         .stTextInput input, .stSelectbox div, .stSlider div, .stCheckbox label,
         [data-testid="stMetricValue"], [data-testid="stMetricLabel"],
-        .stDataFrame, table, th, td {
-            font-family: 'Playfair Display', serif !important;
+        .stDataFrame, table, th, td,
+        button, .stButton button, .stDownloadButton button,
+        .stRadio label, .stTabs [data-baseweb="tab"] {
+            font-family: 'Outfit', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
         }
-        span[data-testid="stIconVisibility"], 
-        button div[data-testid="stMarkdownContainer"] p,
-        [class*="st-emotion-cache"] svg,
-        [class*="st-emotion-cache"] i,
-        span[class*="icon"],
-        button div,
-        .stExpander h2 span,
-        [data-testid="collapsedControlSidebar"] button {
-            font-family: "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
-        }
+
         .stApp { background-color: #0e1117; color: #fafafa; }
         section[data-testid="stSidebar"] { background-color: #1a1d24; }
         h1, h2, h3, h4, h5, h6, p, label, .stMarkdown { color: #fafafa !important; }
         [data-testid="stMetricValue"] { color: #00FF7F !important; }
+
         .block-container {
-            padding-top: 1.2rem !important;
+            padding-top: 1rem !important;
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+            max-width: 1400px;
         }
+
+        /* Title */
         .silver-title {
-            font-family: 'Playfair Display', serif !important;
-            font-size: 3.8rem;
+            font-family: 'Outfit', sans-serif !important;
+            font-size: 2.8rem;
             font-weight: 700;
             text-align: center;
-            margin: -0.6rem 0 0.15rem 0;
-            letter-spacing: 2px;
-            background: linear-gradient(
-                to bottom,
-                #ffffff 0%,
-                #e8e8e8 25%,
-                #c0c0c0 50%,
-                #a0a0a0 75%,
-                #d0d0d0 100%
-            );
+            margin: -0.4rem 0 0.1rem 0;
+            letter-spacing: 1px;
+            background: linear-gradient(to bottom, #ffffff 0%, #c0c0c0 50%, #d0d0d0 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
-            filter: drop-shadow(0 0 6px rgba(192, 192, 192, 0.7))
-                    drop-shadow(0 0 12px rgba(255, 255, 255, 0.3));
+            filter: drop-shadow(0 0 6px rgba(192, 192, 192, 0.6));
         }
         .silver-subtitle {
-            font-family: 'Playfair Display', serif !important;
-            font-size: 2.1rem;
-            font-weight: 600;
+            font-family: 'Outfit', sans-serif !important;
+            font-size: 1.35rem;
+            font-weight: 500;
             text-align: center;
-            margin: 0 0 0.9rem 0;
-            letter-spacing: 1px;
-            background: linear-gradient(
-                to bottom,
-                #ffffff 0%,
-                #e8e8e8 25%,
-                #c0c0c0 50%,
-                #a0a0a0 75%,
-                #d0d0d0 100%
-            );
+            margin: 0 0 0.7rem 0;
+            letter-spacing: 0.5px;
+            background: linear-gradient(to bottom, #ffffff 0%, #c0c0c0 50%, #d0d0d0 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
-            filter: drop-shadow(0 0 4px rgba(192, 192, 192, 0.6))
-                    drop-shadow(0 0 8px rgba(255, 255, 255, 0.25));
         }
+
+        /* News cards */
         .news-box {
             display: flex;
             flex-direction: column;
-            gap: 12px;
+            gap: 10px;
             padding: 10px 0;
             width: 100%;
         }
-        
-        .news-meta {
-            font-size: 0.9rem;
-            color: #a0a0a0;
-            margin: 0;
-        }
-        .news-summary {
-            font-size: 1.05rem;
-            color: #fafafa;
-            line-height: 1.6;
-            margin: 0;
-        }
-        
+        .news-meta { font-size: 0.85rem; color: #a0a0a0; margin: 0; }
+        .news-summary { font-size: 0.98rem; color: #fafafa; line-height: 1.55; margin: 0; }
         .news-action-link {
             align-self: flex-start;
             background-color: #1f242d;
             color: #00FFFF !important;
-            padding: 6px 14px;
-            border-radius: 4px;
+            padding: 8px 14px;
+            border-radius: 6px;
             text-decoration: none !important;
-            font-size: 0.95rem;
-            font-weight: bold;
+            font-size: 0.9rem;
+            font-weight: 600;
             border: 1px solid #3b4252;
-            transition: all 0.2s ease-in-out;
         }
-        
         .news-action-link:hover {
             background-color: #00FF7F;
             color: #0e1117 !important;
             border-color: #00FF7F;
+        }
+
+        /* Buttons – larger tap targets */
+        .stButton > button, .stDownloadButton > button {
+            border-radius: 8px !important;
+            min-height: 2.6rem;
+            font-weight: 600 !important;
+        }
+
+        /* Tables scroll on small screens */
+        [data-testid="stDataFrame"] {
+            overflow-x: auto;
+        }
+
+        /* ===== MOBILE RESPONSIVE ===== */
+        @media (max-width: 768px) {
+            .silver-title { font-size: 1.85rem !important; letter-spacing: 0.5px; }
+            .silver-subtitle { font-size: 1rem !important; margin-bottom: 0.5rem; }
+            .block-container {
+                padding-top: 0.6rem !important;
+                padding-left: 0.6rem !important;
+                padding-right: 0.6rem !important;
+            }
+            [data-testid="stMetricValue"] { font-size: 1.1rem !important; }
+            [data-testid="stMetricLabel"] { font-size: 0.75rem !important; }
+            .stTabs [data-baseweb="tab"] { font-size: 0.8rem !important; padding: 0.4rem 0.5rem !important; }
+        }
+
+        @media (max-width: 480px) {
+            .silver-title { font-size: 1.5rem !important; }
+            .silver-subtitle { font-size: 0.9rem !important; }
         }
     </style>
     """,
@@ -819,7 +823,41 @@ def add_patterns_to_chart(fig: go.Figure, patterns: List[Dict], row: int = 1) ->
 # ============================================================
 # 4. DATA EXTRACTION CORES
 # ============================================================
-@st.cache_data(ttl=60, show_spinner="Fetching market data...")
+def _fetch_one_ticker(t: str, interval: str, lookback: int, period: str, is_6h: bool) -> Tuple[str, Optional[pd.DataFrame]]:
+    """Worker for concurrent ticker fetch."""
+    try:
+        ticker_obj = yf.Ticker(t)
+        hist = ticker_obj.history(period=period, interval=interval, auto_adjust=True)
+        if hist is None or hist.empty:
+            hist = ticker_obj.history(period="1y", interval=interval, auto_adjust=True)
+            if hist is None or hist.empty:
+                return t, None
+        hist = normalize_columns(hist, target_ticker=t)
+        if is_6h and not hist.empty:
+            try:
+                hist = (
+                    hist.resample("6h")
+                    .agg({
+                        "open": "first",
+                        "high": "max",
+                        "low": "min",
+                        "close": "last",
+                        "volume": "sum",
+                    })
+                    .dropna()
+                )
+            except Exception:
+                pass
+        if not hist.empty:
+            hist = add_indicators(hist)
+            display = hist.iloc[-lookback:] if len(hist) >= lookback else hist
+            return t, display
+    except Exception:
+        pass
+    return t, None
+
+
+@st.cache_data(ttl=45, show_spinner="Fetching market data (parallel)...")
 def load_ticker_data(
     tickers: Tuple[str, ...],
     interval: str,
@@ -827,39 +865,24 @@ def load_ticker_data(
     period: str,
     is_6h: bool,
 ) -> Dict[str, pd.DataFrame]:
+    """Parallel fetch for faster multi-ticker loads."""
     results = {}
-    for t in tickers:
-        try:
-            ticker_obj = yf.Ticker(t)
-            hist = ticker_obj.history(period=period, interval=interval, auto_adjust=True)
-            if hist is None or hist.empty:
-                # One retry with a shorter period as fallback
-                hist = ticker_obj.history(period="1y", interval=interval, auto_adjust=True)
-                if hist is None or hist.empty:
-                    continue
-            hist = normalize_columns(hist, target_ticker=t)
-            if is_6h and not hist.empty:
-                try:
-                    hist = (
-                        hist.resample("6h")
-                        .agg({
-                            "open": "first",
-                            "high": "max",
-                            "low": "min",
-                            "close": "last",
-                            "volume": "sum",
-                        })
-                        .dropna()
-                    )
-                except Exception:
-                    pass
-            if not hist.empty:
-                hist = add_indicators(hist)
-                display = hist.iloc[-lookback:] if len(hist) >= lookback else hist
-                results[t] = display
-        except Exception as e:
-            # Fail silently for individual tickers so one bad ticker doesn't break the app
-            pass
+    if not tickers:
+        return results
+    # Cap workers to avoid hammering Yahoo
+    workers = min(8, max(1, len(tickers)))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {
+            ex.submit(_fetch_one_ticker, t, interval, lookback, period, is_6h): t
+            for t in tickers
+        }
+        for fut in as_completed(futures):
+            try:
+                t, df = fut.result()
+                if df is not None and not df.empty:
+                    results[t] = df
+            except Exception:
+                continue
     return results
 
 @st.cache_data(ttl=3600)
@@ -1067,25 +1090,68 @@ def get_futures_metrics(ticker: str, current_price: float = 0.0) -> Dict[str, An
         result["source"] += " (L/S fallback)"
     return result
 
-@st.cache_data(ttl=300, show_spinner="Gathering cross-asset macro indicators...")
+@st.cache_data(ttl=900, show_spinner="Gathering cross-asset macro indicators...")
 def load_macro_data() -> Dict[str, pd.DataFrame]:
+    """Expanded free macro set via Yahoo Finance (no API key)."""
     macro_tickers = {
         "DXY (U.S. Dollar Index)": "DX-Y.NYB",
         "S&P 500 Index": "^GSPC",
         "NASDAQ 100 Index": "^NDX",
+        "Dow Jones": "^DJI",
+        "Russell 2000": "^RUT",
         "Gold Futures": "GC=F",
+        "Silver Futures": "SI=F",
         "Crude Oil Futures": "CL=F",
-        "U.S. 10Y Treasury Yield": "^TNX"
+        "U.S. 2Y Yield": "^IRX",
+        "U.S. 10Y Treasury Yield": "^TNX",
+        "U.S. 30Y Yield": "^TYX",
+        "VIX": "^VIX",
+        "Bitcoin": "BTC-USD",
     }
     macro_results = {}
     for label, sym in macro_tickers.items():
         try:
-            m_hist = yf.Ticker(sym).history(period="3mo", interval="1d", auto_adjust=True)
-            if not m_hist.empty:
+            m_hist = yf.Ticker(sym).history(period="6mo", interval="1d", auto_adjust=True)
+            if m_hist is not None and not m_hist.empty:
                 macro_results[label] = normalize_columns(m_hist, target_ticker=sym)
         except Exception:
             continue
     return macro_results
+
+
+@st.cache_data(ttl=1800, show_spinner="Fetching DeFi / stablecoin landscape...")
+def load_defi_overview() -> Dict[str, Any]:
+    """Free DefiLlama aggregates: total TVL + stablecoin mcap snapshot."""
+    out = {"total_tvl": None, "top_chains": [], "stablecoin_mcap": None, "error": None}
+    try:
+        r = requests.get("https://api.llama.fi/v2/chains", headers=HEADERS, timeout=12)
+        chains = r.json()
+        if isinstance(chains, list) and chains:
+            # sort by TVL
+            ranked = sorted(
+                [c for c in chains if c.get("tvl")],
+                key=lambda x: x.get("tvl") or 0,
+                reverse=True
+            )
+            out["total_tvl"] = sum((c.get("tvl") or 0) for c in ranked)
+            out["top_chains"] = [
+                {"name": c.get("name"), "tvl": c.get("tvl"), "symbol": c.get("tokenSymbol")}
+                for c in ranked[:15]
+            ]
+    except Exception as e:
+        out["error"] = str(e)[:120]
+    try:
+        r2 = requests.get("https://stablecoins.llama.fi/stablecoins?includePrices=true", headers=HEADERS, timeout=12)
+        data = r2.json()
+        # Approximate total from listed pegged assets
+        total = 0.0
+        for s in data.get("peggedAssets", [])[:50]:
+            circ = (s.get("circulating") or {}).get("peggedUSD") or 0
+            total += float(circ)
+        out["stablecoin_mcap"] = total if total > 0 else None
+    except Exception:
+        pass
+    return out
 
 # ============================================================
 # 4b. PREDICTIVE ANALYTICS ENGINE
@@ -1499,7 +1565,7 @@ def build_asset_chart(
         margin=dict(l=10, r=10, t=40, b=10),
         legend=dict(orientation="h", y=1.02),
         xaxis_rangeslider_visible=False,
-        font=dict(family="Playfair Display, serif"),
+        font=dict(family="Outfit, sans-serif"),
     )
     for i in range(1, rows + 1):
         fig.update_xaxes(rangeslider_visible=False, row=i, col=1)
@@ -1751,7 +1817,7 @@ with tab_crypto:
                 fig.update_layout(height=320, template="plotly_dark",
                                   paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
                                   margin=dict(l=10, r=10, t=30, b=10),
-                                  font=dict(family="Playfair Display, serif"))
+                                  font=dict(family="Outfit, sans-serif"))
                 st.plotly_chart(fig, use_container_width=True)
             
             st.subheader("🔥 Asset Analysis Frameworks")
@@ -1840,7 +1906,7 @@ with tab_crypto:
                                            marker=dict(color=levels, colorscale="Portland")))
                 fig_map.update_layout(height=340, template="plotly_dark",
                                       paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
-                                      font=dict(family="Playfair Display, serif"))
+                                      font=dict(family="Outfit, sans-serif"))
                 st.plotly_chart(fig_map, use_container_width=True)
             st.subheader("📊 Real-Time Futures Metrics")
             st.caption("Long/Short Account Ratio • Open Interest • Funding Rate  —  Source: OKX")
@@ -1858,7 +1924,7 @@ with tab_crypto:
                                        text=[f"{liquidity_profiles[k]['shorts']:.1f}%" for k in c_as], textposition="auto"))
                 fig_c.update_layout(height=320, barmode="group", template="plotly_dark",
                                     paper_bgcolor="#0e1117", plot_bgcolor="#0e1117", yaxis_title="%",
-                                    font=dict(family="Playfair Display, serif"))
+                                    font=dict(family="Outfit, sans-serif"))
                 st.plotly_chart(fig_c, use_container_width=True)
             if show_onchain and onchain_profiles:
                 st.subheader("🔗 Real On-chain Metrics")
@@ -1907,52 +1973,90 @@ with tab_crypto:
 
 with tab_macro:
     st.subheader("🌐 Broad Market Telemetry Framework")
-    st.caption("Asynchronous tracking layer pulling multi-asset global correlations over a rolling 90-day window.")
+    st.caption("Equities • Yields • Commodities • Volatility • DeFi liquidity — free public feeds.")
     
     macro_data = load_macro_data()
+    defi = load_defi_overview()
     
     if not macro_data:
-        st.info("Macro matrix data endpoints temporarily unavailable. Retrying query package updates...")
+        st.info("Macro data temporarily unavailable. Try refreshing shortly.")
     else:
+        # Metrics grid
         m_cols = st.columns(3)
         m_index = 0
-        
         for name, m_df in macro_data.items():
             if not m_df.empty and "close" in m_df.columns:
                 current_p = float(m_df["close"].iloc[-1])
                 prior_p = float(m_df["close"].iloc[-2]) if len(m_df) > 1 else current_p
                 pct_delta = ((current_p - prior_p) / prior_p) * 100
-                
                 col_target = m_cols[m_index % 3]
-                if "Yield" in name:
-                    col_target.metric(name, f"{current_p:.2f}%", f"{pct_delta:+.2f}%")
+                if "Yield" in name or name == "VIX":
+                    col_target.metric(name, f"{current_p:.2f}", f"{pct_delta:+.2f}%")
                 else:
                     col_target.metric(name, f"${current_p:,.2f}", f"{pct_delta:+.2f}%")
                 m_index += 1
-        st.markdown("#### 📉 90-Day Normalized Comparative Performance Matrix")
-        st.caption("All indices normalized to zero base from original baseline inception interval to pinpoint risk-on/risk-off decoupling triggers.")
-        
+
+        # 2s10s spread (classic recession signal)
+        st.markdown("#### 📐 Yield Curve: 2Y vs 10Y")
+        try:
+            y2 = macro_data.get("U.S. 2Y Yield")
+            y10 = macro_data.get("U.S. 10Y Treasury Yield")
+            if y2 is not None and y10 is not None and not y2.empty and not y10.empty:
+                common = y2["close"].index.intersection(y10["close"].index)
+                if len(common) > 5:
+                    spread = y10["close"].loc[common] - y2["close"].loc[common]
+                    last_spread = float(spread.iloc[-1])
+                    st.metric("2s10s Spread (10Y − 2Y)", f"{last_spread:.2f} pts",
+                              "Inverted (recession watch)" if last_spread < 0 else "Positive")
+                    fig_sp = go.Figure()
+                    fig_sp.add_trace(go.Scatter(x=spread.index, y=spread, name="2s10s", line=dict(color="#FFD700", width=2)))
+                    fig_sp.add_hline(y=0, line_dash="dash", line_color="gray")
+                    fig_sp.update_layout(
+                        height=280, template="plotly_dark",
+                        paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
+                        margin=dict(l=10, r=10, t=20, b=10),
+                        font=dict(family="Outfit, sans-serif"),
+                        yaxis_title="Spread (pts)"
+                    )
+                    st.plotly_chart(fig_sp, use_container_width=True)
+        except Exception:
+            st.caption("Yield spread chart unavailable for this session.")
+
+        st.markdown("#### 📉 Normalized Performance (6M)")
         macro_combined = pd.DataFrame()
         for name, m_df in macro_data.items():
-            if not m_df.empty and "close" in m_df.columns:
+            if not m_df.empty and "close" in m_df.columns and name != "Bitcoin":
                 base_p = float(m_df["close"].iloc[0])
-                macro_combined[name] = ((m_df["close"] / base_p) - 1) * 100
-                
+                if base_p:
+                    macro_combined[name] = ((m_df["close"] / base_p) - 1) * 100
         if not macro_combined.empty:
             fig_macro = go.Figure()
             for col in macro_combined.columns:
-                fig_macro.add_trace(go.Scatter(x=macro_combined.index, y=macro_combined[col], name=col, line=dict(width=1.8)))
-            
+                fig_macro.add_trace(go.Scatter(x=macro_combined.index, y=macro_combined[col], name=col, line=dict(width=1.5)))
             fig_macro.update_layout(
-                height=450,
-                template="plotly_dark",
-                paper_bgcolor="#0e1117",
-                plot_bgcolor="#0e1117",
+                height=420, template="plotly_dark",
+                paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
                 margin=dict(l=10, r=10, t=20, b=10),
                 legend=dict(orientation="h", y=1.12),
-                font=dict(family="Playfair Display, serif")
+                font=dict(family="Outfit, sans-serif")
             )
             st.plotly_chart(fig_macro, use_container_width=True)
+
+    # DeFi / Stablecoin layer
+    st.markdown("---")
+    st.markdown("#### 🦄 DeFi & Stablecoin Landscape (DefiLlama)")
+    if defi.get("total_tvl"):
+        d1, d2 = st.columns(2)
+        d1.metric("Total Crypto TVL", f"${defi['total_tvl']:,.0f}")
+        if defi.get("stablecoin_mcap"):
+            d2.metric("Stablecoin Supply (approx)", f"${defi['stablecoin_mcap']:,.0f}")
+        if defi.get("top_chains"):
+            chain_df = pd.DataFrame(defi["top_chains"])
+            chain_df["tvl"] = chain_df["tvl"].apply(lambda x: f"${x:,.0f}" if x else "N/A")
+            st.dataframe(chain_df.rename(columns={"name": "Chain", "tvl": "TVL", "symbol": "Symbol"}),
+                         use_container_width=True, hide_index=True)
+    else:
+        st.caption("DefiLlama data temporarily unavailable.")
 
 # ============================================================
 # PREDICTIVE ANALYTICS TAB
@@ -2089,7 +2193,7 @@ with tab_predict:
                     plot_bgcolor="#0e1117",
                     yaxis_title="Score (-100 to +100)",
                     yaxis=dict(range=[-100, 100]),
-                    font=dict(family="Playfair Display, serif"),
+                    font=dict(family="Outfit, sans-serif"),
                     margin=dict(l=10, r=10, t=30, b=10),
                 )
                 fig_score.add_hline(y=0, line_dash="dash", line_color="gray")
@@ -2160,7 +2264,7 @@ with tab_analysis:
                         template="plotly_dark",
                         paper_bgcolor="#0e1117",
                         plot_bgcolor="#0e1117",
-                        font=dict(family="Playfair Display, serif"),
+                        font=dict(family="Outfit, sans-serif"),
                         margin=dict(l=10, r=10, t=40, b=10),
                         yaxis_title="Volatility %"
                     )
@@ -2194,7 +2298,7 @@ with tab_analysis:
                         template="plotly_dark",
                         paper_bgcolor="#0e1117",
                         plot_bgcolor="#0e1117",
-                        font=dict(family="Playfair Display, serif"),
+                        font=dict(family="Outfit, sans-serif"),
                         margin=dict(l=10, r=10, t=20, b=10),
                     )
                     st.plotly_chart(fig_corr, use_container_width=True)
@@ -2264,7 +2368,7 @@ with tab_tools:
                         template="plotly_dark",
                         paper_bgcolor="#0e1117",
                         plot_bgcolor="#0e1117",
-                        font=dict(family="Playfair Display, serif"),
+                        font=dict(family="Outfit, sans-serif"),
                         margin=dict(l=10, r=10, t=40, b=10),
                         yaxis_title="Growth of $1"
                     )
@@ -2371,6 +2475,32 @@ with tab_tools:
                 )
             
             st.success("Use the buttons above to download CSV files.")
+            
+            # Combined research pack (single CSV of key metrics)
+            st.markdown("#### Research Pack")
+            try:
+                pack_rows = []
+                for t, df in export_data.items():
+                    if df is None or df.empty or "close" not in df.columns:
+                        continue
+                    last = df.iloc[-1]
+                    pack_rows.append({
+                        "Ticker": t,
+                        "Price": float(last["close"]),
+                        "RSI": float(last["rsi"]) if "rsi" in df.columns and pd.notna(last.get("rsi")) else None,
+                        "ATR": float(last["atr"]) if "atr" in df.columns and pd.notna(last.get("atr")) else None,
+                    })
+                if pack_rows:
+                    pack_df = pd.DataFrame(pack_rows)
+                    st.download_button(
+                        "Download Research Pack CSV",
+                        data=dataframe_to_csv_bytes(pack_df.set_index("Ticker")),
+                        file_name="research_pack.csv",
+                        mime="text/csv",
+                        key="dl_research_pack"
+                    )
+            except Exception:
+                pass
 
 
 
