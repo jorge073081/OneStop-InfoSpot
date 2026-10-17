@@ -228,8 +228,6 @@ import json
 import os
 from datetime import datetime
 
-WATCHLIST_FILE = "user_watchlist.json"
-PORTFOLIO_FILE = "user_portfolio.json"
 
 def load_json_file(path: str, default=None):
     if default is None:
@@ -251,193 +249,6 @@ def save_json_file(path: str, data):
         return True
     except Exception:
         return False
-
-
-# ----- Supabase (optional multi-user persistence) -----
-@st.cache_resource
-def get_supabase_client():
-    """
-    Returns a supabase client if URL + key are configured, else None.
-    Secrets:
-      supabase_url = "https://xxxx.supabase.co"
-      supabase_key = "eyJ..."   # anon/public key is fine for this app pattern
-    """
-    url, key = "", ""
-    try:
-        url = st.secrets.get("supabase_url", "") or ""
-        key = st.secrets.get("supabase_key", "") or ""
-    except Exception:
-        pass
-    # Also allow session/sidebar override set later
-    if not url:
-        url = st.session_state.get("supabase_url_override", "") or ""
-    if not key:
-        key = st.session_state.get("supabase_key_override", "") or ""
-    if not url or not key:
-        return None
-    try:
-        from supabase import create_client
-        return create_client(url, key)
-    except Exception:
-        return None
-
-
-def _user_scope_id() -> str:
-    """Stable-ish per-browser scope for row ownership without full auth."""
-    if "session_id" not in st.session_state:
-        st.session_state.session_id = str(uuid.uuid4())
-    # Prefer explicit user label if set
-    label = st.session_state.get("persistence_user_id", "").strip()
-    if label:
-        return label[:64]
-    return st.session_state.session_id
-
-
-def load_watchlist() -> list:
-    sb = get_supabase_client()
-    if sb is not None:
-        try:
-            uid = _user_scope_id()
-            res = sb.table("watchlists").select("tickers").eq("user_id", uid).limit(1).execute()
-            rows = res.data or []
-            if rows and isinstance(rows[0].get("tickers"), list):
-                return rows[0]["tickers"]
-            return []
-        except Exception:
-            pass
-    return load_json_file(WATCHLIST_FILE, [])
-
-
-def save_watchlist(tickers: list):
-    sb = get_supabase_client()
-    if sb is not None:
-        try:
-            uid = _user_scope_id()
-            sb.table("watchlists").upsert({
-                "user_id": uid,
-                "tickers": tickers,
-                "updated_at": datetime.utcnow().isoformat() + "Z",
-            }).execute()
-            return True
-        except Exception:
-            pass
-    return save_json_file(WATCHLIST_FILE, tickers)
-
-
-def load_portfolio() -> list:
-    """List of dicts: {ticker, qty, entry_price}"""
-    sb = get_supabase_client()
-    if sb is not None:
-        try:
-            uid = _user_scope_id()
-            res = sb.table("portfolios").select("holdings").eq("user_id", uid).limit(1).execute()
-            rows = res.data or []
-            if rows and isinstance(rows[0].get("holdings"), list):
-                return rows[0]["holdings"]
-            return []
-        except Exception:
-            pass
-    return load_json_file(PORTFOLIO_FILE, [])
-
-
-def save_portfolio(portfolio: list):
-    sb = get_supabase_client()
-    if sb is not None:
-        try:
-            uid = _user_scope_id()
-            sb.table("portfolios").upsert({
-                "user_id": uid,
-                "holdings": portfolio,
-                "updated_at": datetime.utcnow().isoformat() + "Z",
-            }).execute()
-            return True
-        except Exception:
-            pass
-    return save_json_file(PORTFOLIO_FILE, portfolio)
-
-
-# ============================================================
-# 2d. ALERTS SYSTEM
-# ============================================================
-ALERTS_FILE = "user_alerts.json"
-
-def load_alerts() -> list:
-    """List of alert dicts"""
-    sb = get_supabase_client()
-    if sb is not None:
-        try:
-            uid = _user_scope_id()
-            res = sb.table("alerts").select("rules").eq("user_id", uid).limit(1).execute()
-            rows = res.data or []
-            if rows and isinstance(rows[0].get("rules"), list):
-                return rows[0]["rules"]
-            return []
-        except Exception:
-            pass
-    return load_json_file(ALERTS_FILE, [])
-
-def save_alerts(alerts: list):
-    sb = get_supabase_client()
-    if sb is not None:
-        try:
-            uid = _user_scope_id()
-            sb.table("alerts").upsert({
-                "user_id": uid,
-                "rules": alerts,
-                "updated_at": datetime.utcnow().isoformat() + "Z",
-            }).execute()
-            return True
-        except Exception:
-            pass
-    return save_json_file(ALERTS_FILE, alerts)
-
-def check_alerts(alerts: list, data: dict, liquidity_profiles: dict, patterns_by_ticker: dict) -> list:
-    """
-    Evaluate all alerts against current data.
-    Returns list of triggered alert messages.
-    """
-    triggered = []
-    for alert in alerts:
-        try:
-            t = alert.get("ticker", "").upper()
-            atype = alert.get("type")
-            condition = alert.get("condition")
-            value = float(alert.get("value", 0))
-            
-            if atype == "price" and t in data and not data[t].empty:
-                price = float(data[t]["close"].iloc[-1])
-                if condition == "above" and price >= value:
-                    triggered.append(f"🚨 {t} price ${price:,.2f} is ABOVE ${value:,.2f}")
-                elif condition == "below" and price <= value:
-                    triggered.append(f"🚨 {t} price ${price:,.2f} is BELOW ${value:,.2f}")
-            
-            elif atype == "rsi" and t in data and "rsi" in data[t].columns:
-                rsi = data[t]["rsi"].iloc[-1]
-                if not pd.isna(rsi):
-                    if condition == "above" and rsi >= value:
-                        triggered.append(f"🚨 {t} RSI {rsi:.1f} is ABOVE {value}")
-                    elif condition == "below" and rsi <= value:
-                        triggered.append(f"🚨 {t} RSI {rsi:.1f} is BELOW {value}")
-            
-            elif atype == "funding" and t in liquidity_profiles:
-                fr = liquidity_profiles[t].get("funding")
-                if fr is not None:
-                    if condition == "above" and fr >= value:
-                        triggered.append(f"🚨 {t} Funding {fr:.4f}% is ABOVE {value}%")
-                    elif condition == "below" and fr <= value:
-                        triggered.append(f"🚨 {t} Funding {fr:.4f}% is BELOW {value}%")
-            
-            elif atype == "pattern" and t in patterns_by_ticker:
-                pats = patterns_by_ticker.get(t, [])
-                target = alert.get("pattern_type", "").lower()
-                for p in pats:
-                    if target in p["type"].lower():
-                        triggered.append(f"🚨 {t} Pattern detected: {p['type']} ({p['direction']})")
-                        break
-        except Exception:
-            continue
-    return triggered
-
 
 
 # ============================================================
@@ -509,25 +320,6 @@ def compute_multi_period_performance(data: Dict[str, pd.DataFrame]) -> pd.DataFr
 # ============================================================
 import io as _io
 from datetime import datetime
-
-ALERT_HISTORY_FILE = "alert_history.json"
-
-def load_alert_history() -> list:
-    return load_json_file(ALERT_HISTORY_FILE, [])
-
-def save_alert_history(history: list):
-    # Keep last 200 entries only
-    save_json_file(ALERT_HISTORY_FILE, history[-200:])
-
-def log_triggered_alerts(triggered: list):
-    if not triggered:
-        return
-    history = load_alert_history()
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-    for msg in triggered:
-        history.append({"time": now, "message": msg})
-    save_alert_history(history)
-
 
 def run_rsi_backtest(df: pd.DataFrame, low=30, high=70):
     """Simple RSI mean-reversion backtest. Returns stats + equity curve."""
@@ -1834,56 +1626,6 @@ show_vs_btc = st.sidebar.checkbox("Relative Strength vs BTC", value=False)
 show_onchain = st.sidebar.checkbox("Show On-chain Metrics", value=True)
 
 
-# --- ALERTS ---
-st.sidebar.subheader("🔔 Alerts")
-if "alerts" not in st.session_state:
-    st.session_state.alerts = load_alerts()
-
-with st.sidebar.expander("Create New Alert"):
-    a_ticker = st.text_input("Ticker", placeholder="BTC-USD", key="a_ticker")
-    a_type = st.selectbox("Alert Type", ["price", "rsi", "funding", "pattern"], key="a_type")
-    
-    if a_type == "pattern":
-        a_pattern = st.selectbox("Pattern", ["Hammer", "Doji", "Bullish Engulfing", "Bearish Engulfing", "Double Top", "Double Bottom", "Support", "Resistance"], key="a_pattern")
-        a_condition = "detected"
-        a_value = 0.0
-    else:
-        a_condition = st.selectbox("Condition", ["above", "below"], key="a_cond")
-        a_value = st.number_input("Value", value=0.0, key="a_value")
-        a_pattern = ""
-    
-    if st.button("Add Alert") and a_ticker.strip():
-        t = a_ticker.strip().upper()
-        if not t.endswith("-USD") and t.isalpha():
-            t = t + "-USD"
-        new_alert = {
-            "ticker": t,
-            "type": a_type,
-            "condition": a_condition,
-            "value": a_value,
-            "pattern_type": a_pattern,
-        }
-        st.session_state.alerts.append(new_alert)
-        save_alerts(st.session_state.alerts)
-        st.success("Alert added")
-        st.rerun()
-
-if st.session_state.alerts:
-    st.sidebar.write(f"**Active Alerts ({len(st.session_state.alerts)}):**")
-    for i, a in enumerate(st.session_state.alerts):
-        if a["type"] == "pattern":
-            desc = f"{a['ticker']} → {a['pattern_type']}"
-        else:
-            desc = f"{a['ticker']} {a['type']} {a['condition']} {a['value']}"
-        cols = st.sidebar.columns([4, 1])
-        cols[0].caption(desc)
-        if cols[1].button("x", key=f"rm_alert_{i}"):
-            st.session_state.alerts.pop(i)
-            save_alerts(st.session_state.alerts)
-            st.rerun()
-else:
-    st.sidebar.caption("No active alerts")
-
 st.sidebar.subheader("🔑 Optional API Keys")
 fred_key_default = ""
 try:
@@ -1902,34 +1644,6 @@ if fred_api_key:
 else:
     st.sidebar.caption("Without a FRED key, built-in Yahoo macro still works.")
 
-st.sidebar.subheader("☁️ Supabase Persistence")
-sb_url_default, sb_key_default = "", ""
-try:
-    sb_url_default = st.secrets.get("supabase_url", "") or ""
-    sb_key_default = st.secrets.get("supabase_key", "") or ""
-except Exception:
-    pass
-
-with st.sidebar.expander("Supabase setup (optional)", expanded=False):
-    st.caption("Free tier: multi-user watchlist / portfolio / alerts. Leave empty to use local JSON.")
-    sb_url = st.text_input("Supabase URL", value=sb_url_default, key="sb_url_input")
-    sb_key = st.text_input("Supabase anon key", value=sb_key_default, type="password", key="sb_key_input")
-    user_label = st.text_input(
-        "Your user ID / nickname",
-        value=st.session_state.get("persistence_user_id", ""),
-        help="Same ID on phone + desktop = same watchlist/portfolio. Example: myname_2026",
-        key="persist_user_id_input"
-    )
-    if user_label.strip():
-        st.session_state.persistence_user_id = user_label.strip()
-    if sb_url.strip():
-        st.session_state.supabase_url_override = sb_url.strip()
-    if sb_key.strip():
-        st.session_state.supabase_key_override = sb_key.strip()
-    if get_supabase_client() is not None:
-        st.success("Supabase connected")
-    else:
-        st.caption("Not connected — using local JSON fallback.")
 
 res_cfg = RESOLUTION_MAP[res_disp]
 interval = res_cfg["interval"]
@@ -2008,15 +1722,6 @@ with tab_brief:
                     brief_patterns.append({"ticker": t, **p})
             except Exception:
                 pass
-
-    # Alerts
-    brief_triggered = []
-    if st.session_state.get("alerts") and brief_data:
-        try:
-            temp_liq = {t: {"funding": (brief_fut.get(t) or {}).get("funding_rate")} for t in brief_data}
-            brief_triggered = check_alerts(st.session_state.alerts, brief_data, temp_liq, {})
-        except Exception:
-            pass
 
     # ===== ROW 1: Core regime metrics =====
     st.markdown("### Market regime")
@@ -2133,14 +1838,27 @@ with tab_brief:
                 st.markdown(f"- **{p['ticker']}**: {p['type']} ({p['direction']}) @ {p.get('price', 0):,.2f}")
 
     with c4:
-        st.markdown("### 🔔 Alerts")
-        if brief_triggered:
-            for msg in brief_triggered:
-                st.warning(msg)
-        else:
-            st.success("No alert rules firing right now.")
-        n_alerts = len(st.session_state.get("alerts") or [])
-        st.caption(f"{n_alerts} alert rule(s) configured in the sidebar.")
+        st.markdown("### 📊 Quick regime read")
+        try:
+            notes = []
+            try:
+                fv = float(fng_v)
+                if fv <= 25:
+                    notes.append("Sentiment: **Extreme Fear** — historically contrarian-friendly.")
+                elif fv >= 75:
+                    notes.append("Sentiment: **Greed** — late-cycle risk can rise.")
+                else:
+                    notes.append(f"Sentiment: **{fng_c}** ({fng_v}).")
+            except Exception:
+                notes.append("Sentiment data unavailable.")
+            if defi_snap.get("total_tvl"):
+                notes.append(f"DeFi TVL ≈ **${defi_snap['total_tvl']/1e9:.1f}B**.")
+            if defi_snap.get("stablecoin_mcap"):
+                notes.append(f"Stablecoins ≈ **${defi_snap['stablecoin_mcap']/1e9:.1f}B**.")
+            for n in notes:
+                st.markdown(f"- {n}")
+        except Exception:
+            st.caption("Regime notes unavailable.")
 
     # ===== Technical strip =====
     if brief_data:
@@ -2270,41 +1988,7 @@ with tab_crypto:
         if not data:
             st.error("No valid data loaded. Check tickers or try a different resolution. Some data sources may be temporarily unavailable.")
         else:
-            # ----- Evaluate Alerts -----
-            patterns_by_ticker = {}
-            if show_patterns:
-                for t, hist in data.items():
-                    try:
-                        patterns_by_ticker[t] = detect_all_patterns(hist)
-                    except Exception:
-                        patterns_by_ticker[t] = []
-            
-            # Build temporary liquidity for alert checking
-            temp_liquidity = {}
-            for t, hist in data.items():
-                if not hist.empty and "close" in hist.columns:
-                    try:
-                        cpx = float(hist["close"].iloc[-1])
-                        fut = get_futures_metrics(t, current_price=cpx)
-                        temp_liquidity[t] = {
-                            "longs": fut.get("long_pct", 50),
-                            "shorts": fut.get("short_pct", 50),
-                            "funding": fut.get("funding_rate"),
-                        }
-                    except Exception:
-                        pass
-            
-            if "alerts" in st.session_state and st.session_state.alerts:
-                triggered = check_alerts(
-                    st.session_state.alerts,
-                    data,
-                    temp_liquidity,
-                    patterns_by_ticker
-                )
-                if triggered:
-                    log_triggered_alerts(triggered)
-                    for msg in triggered:
-                        st.warning(msg)
+
 
             daily_pivots = get_daily_pivots(tuple(tkrs))
             btc_data = None
@@ -2939,7 +2623,7 @@ with tab_tools:
     
     tool_sub = st.radio(
         "Select tool:",
-        ["📈 Backtesting", "⏱️ Multi-Timeframe View", "🔔 Alert History", "📥 Export Data"],
+        ["📈 Backtesting", "⏱️ Multi-Timeframe View", "📥 Export Data"],
         horizontal=True
     )
     
@@ -3020,22 +2704,6 @@ with tab_tools:
                             st.write(f"RSI: {vals['rsi']:.1f}")
                         if vals.get("sma50") is not None:
                             st.write(f"SMA50: ${vals['sma50']:,.2f}")
-    
-    # ---------- ALERT HISTORY ----------
-    elif tool_sub == "🔔 Alert History":
-        st.markdown("### Alert History (last 200)")
-        history = load_alert_history()
-        if not history:
-            st.info("No alerts have been triggered yet.")
-        else:
-            hist_df = pd.DataFrame(history[::-1])  # newest first
-            st.dataframe(hist_df, use_container_width=True, hide_index=True)
-            if st.button("Clear Alert History"):
-                save_alert_history([])
-                st.success("History cleared")
-                st.rerun()
-    
-    # ---------- EXPORT ----------
     elif tool_sub == "📥 Export Data":
         st.markdown("### Export Data")
         st.caption("Download current data as CSV files.")
@@ -3064,28 +2732,6 @@ with tab_tools:
                     file_name="volatility.csv",
                     mime="text/csv"
                 )
-            
-            # Alerts export
-            if st.session_state.get("alerts"):
-                al_df = pd.DataFrame(st.session_state.alerts)
-                st.download_button(
-                    "Download Active Alerts CSV",
-                    data=dataframe_to_csv_bytes(al_df),
-                    file_name="alerts.csv",
-                    mime="text/csv"
-                )
-            
-            # Alert history export
-            hist = load_alert_history()
-            if hist:
-                hist_df = pd.DataFrame(hist)
-                st.download_button(
-                    "Download Alert History CSV",
-                    data=dataframe_to_csv_bytes(hist_df),
-                    file_name="alert_history.csv",
-                    mime="text/csv"
-                )
-            
             st.success("Use the buttons above to download CSV files.")
             
             # Combined research pack (single CSV of key metrics)
