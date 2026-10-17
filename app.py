@@ -1660,31 +1660,34 @@ if t_raw != st.session_state.main_tickers_value:
     st.session_state.main_tickers_value = t_raw
 
 tkrs = [t.strip().upper() for t in st.session_state.main_tickers_value.split(",") if t.strip()]
+# Performance cap — free Yahoo endpoints stay responsive
+MAX_TICKERS = 6
+if len(tkrs) > MAX_TICKERS:
+    st.sidebar.warning(f"Using first {MAX_TICKERS} tickers (max for speed).")
+    tkrs = tkrs[:MAX_TICKERS]
 
 res_disp = st.sidebar.selectbox("Resolution", list(RESOLUTION_MAP.keys()))
 rf_rate = st.sidebar.slider("Refresh Rate (Seconds)", 15, 120, 45)
 
-st.sidebar.subheader("Chart Type & Indicators")
-show_candles = st.sidebar.checkbox("Candlestick Chart", value=True)
+st.sidebar.subheader("Charts")
+show_candles = st.sidebar.checkbox("Candlesticks", value=True)
 show_sma50 = st.sidebar.checkbox("50 SMA", value=True)
-show_sma200 = st.sidebar.checkbox("200 SMA", value=True)
-show_bb = st.sidebar.checkbox("Bollinger Bands (20,2)", value=True)
-show_rsi = st.sidebar.checkbox("RSI (14)", value=True)
-show_macd = st.sidebar.checkbox("MACD (12,26,9)", value=True)
-show_stoch = st.sidebar.checkbox("Stochastic %K/%D", value=False)
-show_atr = st.sidebar.checkbox("ATR (14)", value=False)
-show_vol_profile = st.sidebar.checkbox("Volume Profile", value=True)
+show_sma200 = st.sidebar.checkbox("200 SMA", value=False)
+show_rsi = st.sidebar.checkbox("RSI", value=True)
+show_vol_profile = st.sidebar.checkbox("Volume", value=True)
 
-st.sidebar.subheader("Pattern Recognition")
-show_patterns = st.sidebar.checkbox("Chart Pattern Recognition", value=False)
-st.sidebar.caption("Doji • Hammer • Engulfing • Double Top/Bottom • Support/Resistance")
-
-st.sidebar.subheader("Overlays & On-chain")
-show_baseline = st.sidebar.checkbox("Historical Baseline (Period Avg)", value=True)
-show_long_baseline = st.sidebar.checkbox("Long-term Baseline (1Y Avg)", value=False)
-show_vwap = st.sidebar.checkbox("VWAP", value=False)
-show_vs_btc = st.sidebar.checkbox("Relative Strength vs BTC", value=False)
-show_onchain = st.sidebar.checkbox("Show On-chain Metrics", value=True)
+with st.sidebar.expander("More indicators", expanded=False):
+    show_bb = st.checkbox("Bollinger Bands", value=False)
+    show_macd = st.checkbox("MACD", value=False)
+    show_stoch = st.checkbox("Stochastic", value=False)
+    show_atr = st.checkbox("ATR", value=False)
+    show_baseline = st.checkbox("Period baseline", value=False)
+    show_long_baseline = st.checkbox("Long-term baseline", value=False)
+    show_vwap = st.checkbox("VWAP", value=False)
+    show_vs_btc = st.checkbox("vs BTC", value=False)
+    show_onchain = st.checkbox("On-chain metrics", value=False)
+    show_patterns = st.checkbox("Pattern recognition", value=False)
+    st.caption("Patterns: Doji, Hammer, Engulfing, Double Top/Bottom, S/R")
 
 
 st.sidebar.subheader("🔑 Optional API Keys")
@@ -1740,242 +1743,158 @@ with col_users:
 
 st.caption("Dark mode • Candlesticks • Pattern Recognition • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro • 15Y Historical • Predictive Analytics")
 
-tab_brief, tab_crypto, tab_compare, tab_macro, tab_predict, tab_analysis, tab_tools = st.tabs([
-    "☀️ Briefing",
-    "⚡ Crypto",
-    "🔀 Compare",
-    "🌐 Macro",
-    "🔮 Predictive",
-    "📊 Analysis",
-    "🛠️ Tools"
-])
+# Radio nav = only the active section runs heavy code (faster than st.tabs)
+nav = st.radio(
+    "Navigate",
+    ["☀️ Briefing", "⚡ Crypto", "🔀 Compare", "🌐 Macro", "🔮 Predictive", "📊 Analysis", "🛠️ Tools"],
+    horizontal=True,
+    label_visibility="collapsed",
+    key="main_nav",
+)
+
 
 
 
 # ============================================================
 # BRIEFING TAB (expanded daily command center)
 # ============================================================
-with tab_brief:
+
+if nav == "☀️ Briefing":
     st.subheader("☀️ Daily Briefing")
-    st.caption("Market pulse in one place — macro, movers, positioning, patterns, and headlines.")
+    st.caption("What matters right now — then go deeper in Crypto, Compare, or Macro.")
 
-    # ---- Cached light data ----
-    try:
-        fng_v, fng_c = get_fear_greed()
-    except Exception:
-        fng_v, fng_c = "N/A", "N/A"
-    try:
-        macro_snap = load_macro_data()
-    except Exception:
-        macro_snap = {}
-    try:
-        defi_snap = load_defi_overview()
-    except Exception:
-        defi_snap = {}
-
-    brief_data = get_shared_market_data(tkrs, interval, lookback_bars, period, is_6h) if tkrs else {}
-
-    # Futures snapshot for briefing tickers
-    brief_fut = {}
-    for t, hist in (brief_data or {}).items():
-        if hist is not None and not hist.empty and "close" in hist.columns:
-            try:
-                cpx = float(hist["close"].iloc[-1])
-                brief_fut[t] = get_futures_metrics(t, current_price=cpx)
-            except Exception:
-                pass
-
-    # Patterns (if enabled)
-    brief_patterns = []
-    if show_patterns and brief_data:
-        for t, hist in list(brief_data.items())[:4]:
-            try:
-                for p in detect_all_patterns(hist)[:3]:
-                    brief_patterns.append({"ticker": t, **p})
-            except Exception:
-                pass
-
-    # ===== ROW 1: Core regime metrics =====
-    st.markdown("### Market regime")
-    r1 = st.columns(6)
-    r1[0].metric("Fear & Greed", f"{fng_v}/100", fng_c)
-    if "VIX" in macro_snap and not macro_snap["VIX"].empty:
-        r1[1].metric("VIX", f"{float(macro_snap['VIX']['close'].iloc[-1]):.1f}")
+    if not tkrs:
+        st.info("👈 Add up to 6 tickers in the sidebar to begin.")
     else:
-        r1[1].metric("VIX", "—")
-    if "DXY (U.S. Dollar Index)" in macro_snap and not macro_snap["DXY (U.S. Dollar Index)"].empty:
-        dxy = macro_snap["DXY (U.S. Dollar Index)"]
-        dxy_p = float(dxy["close"].iloc[-1])
-        dxy_d = ((dxy_p / float(dxy["close"].iloc[-2])) - 1) * 100 if len(dxy) > 1 else 0
-        r1[2].metric("DXY", f"{dxy_p:.2f}", f"{dxy_d:+.2f}%")
-    else:
-        r1[2].metric("DXY", "—")
-    if "U.S. 10Y Treasury Yield" in macro_snap and not macro_snap["U.S. 10Y Treasury Yield"].empty:
-        r1[3].metric("US 10Y", f"{float(macro_snap['U.S. 10Y Treasury Yield']['close'].iloc[-1]):.2f}%")
-    else:
-        r1[3].metric("US 10Y", "—")
-    # 2s10s
-    try:
-        y2 = macro_snap.get("U.S. 2Y Yield")
-        y10 = macro_snap.get("U.S. 10Y Treasury Yield")
-        if y2 is not None and y10 is not None and not y2.empty and not y10.empty:
-            common = y2["close"].index.intersection(y10["close"].index)
-            sp = float(y10["close"].loc[common].iloc[-1] - y2["close"].loc[common].iloc[-1])
-            r1[4].metric("2s10s", f"{sp:.2f}", "Inverted" if sp < 0 else "Positive")
-        else:
-            r1[4].metric("2s10s", "—")
-    except Exception:
-        r1[4].metric("2s10s", "—")
-    if defi_snap.get("total_tvl"):
-        r1[5].metric("Crypto TVL", f"${defi_snap['total_tvl']/1e9:.1f}B")
-    else:
-        r1[5].metric("Crypto TVL", "—")
-
-    # ===== ROW 2: Equity / commodity pulse =====
-    st.markdown("### Equities & commodities")
-    eq_cols = st.columns(5)
-    eq_map = [
-        ("S&P 500 Index", "S&P 500"),
-        ("NASDAQ 100 Index", "Nasdaq"),
-        ("Gold Futures", "Gold"),
-        ("Crude Oil Futures", "Oil"),
-        ("Bitcoin", "BTC"),
-    ]
-    for i, (key, label) in enumerate(eq_map):
-        if key in macro_snap and not macro_snap[key].empty:
-            df = macro_snap[key]
-            px = float(df["close"].iloc[-1])
-            ch = ((px / float(df["close"].iloc[-2])) - 1) * 100 if len(df) > 1 else 0
-            if "Yield" in key:
-                eq_cols[i].metric(label, f"{px:.2f}", f"{ch:+.2f}%")
-            else:
-                eq_cols[i].metric(label, f"${px:,.2f}" if px > 50 else f"{px:,.2f}", f"{ch:+.2f}%")
-        else:
-            eq_cols[i].metric(label, "—")
-
-    st.markdown("---")
-
-    # ===== Movers + Positioning =====
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown("### 📈 Session movers")
-        if not brief_data:
-            st.info("Add tickers in the sidebar to populate movers.")
-        else:
-            rows = []
-            for t, df in brief_data.items():
-                if df is None or len(df) < 2 or "close" not in df.columns:
-                    continue
-                px = float(df["close"].iloc[-1])
-                ch1 = (px / float(df["close"].iloc[-2]) - 1) * 100
-                ch5 = (px / float(df["close"].iloc[-6]) - 1) * 100 if len(df) > 6 else None
-                rsi = df["rsi"].iloc[-1] if "rsi" in df.columns else None
-                rows.append({
-                    "Ticker": t,
-                    "Price": f"${px:,.2f}",
-                    "1-bar": f"{ch1:+.2f}%",
-                    "5-bar": f"{ch5:+.2f}%" if ch5 is not None else "—",
-                    "RSI": f"{float(rsi):.0f}" if rsi is not None and pd.notna(rsi) else "—",
-                })
-            rows = sorted(rows, key=lambda r: float(r["1-bar"].replace("%", "")), reverse=True)
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-    with c2:
-        st.markdown("### ⚖️ Futures positioning")
-        if not brief_fut:
-            st.caption("No futures metrics loaded.")
-        else:
-            frows = []
-            for t, fut in brief_fut.items():
-                frows.append({
-                    "Ticker": t,
-                    "Long %": f"{fut.get('long_pct', 50):.0f}%",
-                    "Short %": f"{fut.get('short_pct', 50):.0f}%",
-                    "Funding": f"{fut['funding_rate']:+.4f}%" if fut.get("funding_rate") is not None else "—",
-                })
-            st.dataframe(pd.DataFrame(frows), use_container_width=True, hide_index=True)
-        if defi_snap.get("stablecoin_mcap"):
-            st.metric("Stablecoin supply (approx)", f"${defi_snap['stablecoin_mcap']/1e9:.1f}B")
-
-    # ===== Patterns + Alerts =====
-    c3, c4 = st.columns(2)
-    with c3:
-        st.markdown("### 🔎 Pattern signals")
-        if not show_patterns:
-            st.caption("Enable **Chart Pattern Recognition** in the sidebar to populate this.")
-        elif not brief_patterns:
-            st.caption("No notable patterns on loaded tickers.")
-        else:
-            for p in brief_patterns[:8]:
-                st.markdown(f"- **{p['ticker']}**: {p['type']} ({p['direction']}) @ {p.get('price', 0):,.2f}")
-
-    with c4:
-        st.markdown("### 📊 Quick regime read")
+        # Lightweight parallel-ish loads (all cached)
         try:
-            notes = []
-            try:
-                fv = float(fng_v)
-                if fv <= 25:
-                    notes.append("Sentiment: **Extreme Fear** — historically contrarian-friendly.")
-                elif fv >= 75:
-                    notes.append("Sentiment: **Greed** — late-cycle risk can rise.")
-                else:
-                    notes.append(f"Sentiment: **{fng_c}** ({fng_v}).")
-            except Exception:
-                notes.append("Sentiment data unavailable.")
-            if defi_snap.get("total_tvl"):
-                notes.append(f"DeFi TVL ≈ **${defi_snap['total_tvl']/1e9:.1f}B**.")
-            if defi_snap.get("stablecoin_mcap"):
-                notes.append(f"Stablecoins ≈ **${defi_snap['stablecoin_mcap']/1e9:.1f}B**.")
-            for n in notes:
-                st.markdown(f"- {n}")
+            fng_v, fng_c = get_fear_greed()
         except Exception:
-            st.caption("Regime notes unavailable.")
+            fng_v, fng_c = "—", "—"
+        try:
+            macro_snap = load_macro_data()
+        except Exception:
+            macro_snap = {}
+        try:
+            defi_snap = load_defi_overview()
+        except Exception:
+            defi_snap = {}
 
-    # ===== Technical strip =====
-    if brief_data:
-        st.markdown("### Technical snapshot")
-        trows = []
-        for t, df in brief_data.items():
-            if df is None or df.empty:
-                continue
-            last = df.iloc[-1]
-            trows.append({
-                "Ticker": t,
-                "RSI": f"{last['rsi']:.0f}" if "rsi" in df.columns and pd.notna(last.get("rsi")) else "—",
-                "MACD hist": f"{last['macd_hist']:.2f}" if "macd_hist" in df.columns and pd.notna(last.get("macd_hist")) else "—",
-                "vs SMA50": (
-                    "Above" if "sma50" in df.columns and pd.notna(last.get("sma50")) and last["close"] > last["sma50"]
-                    else "Below" if "sma50" in df.columns and pd.notna(last.get("sma50")) else "—"
-                ),
-                "ATR %": (
-                    f"{(last['atr']/last['close']*100):.2f}%"
-                    if "atr" in df.columns and pd.notna(last.get("atr")) and last["close"]
-                    else "—"
-                ),
-            })
-        if trows:
-            st.dataframe(pd.DataFrame(trows), use_container_width=True, hide_index=True)
+        with st.spinner("Loading briefing…"):
+            brief_data = get_shared_market_data(tkrs, interval, lookback_bars, period, is_6h)
 
-    # ===== News =====
-    st.markdown("### 📰 Headlines")
-    try:
-        news = get_crypto_news(cache_buster=pd.Timestamp.now().strftime("%Y-%m-%d %H"))
-        if news:
-            for art in news[:8]:
-                st.markdown(f"- **{art['source']}** · {art.get('published', '')} — [{art['title']}]({art['link']})")
+        # --- Regime one-liner ---
+        regime = "Mixed"
+        try:
+            fv = float(fng_v)
+            vix = float(macro_snap["VIX"]["close"].iloc[-1]) if "VIX" in macro_snap and not macro_snap["VIX"].empty else None
+            if fv <= 25 and (vix is None or vix >= 20):
+                regime = "Stress / Fear — historically better for patient entries"
+            elif fv >= 75:
+                regime = "Greed — late-cycle risk; favor discipline over FOMO"
+            elif vix is not None and vix >= 25:
+                regime = "Elevated volatility — size down, wait for clarity"
+            else:
+                regime = "Neutral / mixed — follow your levels"
+        except Exception:
+            pass
+        st.markdown(f"**Regime read:** {regime}")
+
+        # --- Top metrics ---
+        c = st.columns(6)
+        c[0].metric("Fear & Greed", f"{fng_v}", str(fng_c)[:16] if fng_c else "")
+        if "VIX" in macro_snap and not macro_snap["VIX"].empty:
+            c[1].metric("VIX", f"{float(macro_snap['VIX']['close'].iloc[-1]):.1f}")
         else:
-            st.caption("No headlines available.")
-    except Exception:
-        st.caption("News feed unavailable.")
+            c[1].metric("VIX", "—")
+        if "DXY (U.S. Dollar Index)" in macro_snap and not macro_snap["DXY (U.S. Dollar Index)"].empty:
+            dxy = macro_snap["DXY (U.S. Dollar Index)"]
+            px = float(dxy["close"].iloc[-1])
+            ch = ((px / float(dxy["close"].iloc[-2])) - 1) * 100 if len(dxy) > 1 else 0
+            c[2].metric("DXY", f"{px:.1f}", f"{ch:+.1f}%")
+        else:
+            c[2].metric("DXY", "—")
+        if "U.S. 10Y Treasury Yield" in macro_snap and not macro_snap["U.S. 10Y Treasury Yield"].empty:
+            c[3].metric("US 10Y", f"{float(macro_snap['U.S. 10Y Treasury Yield']['close'].iloc[-1]):.2f}%")
+        else:
+            c[3].metric("US 10Y", "—")
+        try:
+            y2, y10 = macro_snap.get("U.S. 2Y Yield"), macro_snap.get("U.S. 10Y Treasury Yield")
+            if y2 is not None and y10 is not None and not y2.empty and not y10.empty:
+                common = y2["close"].index.intersection(y10["close"].index)
+                sp = float(y10["close"].loc[common].iloc[-1] - y2["close"].loc[common].iloc[-1])
+                c[4].metric("2s10s", f"{sp:.2f}", "Inv" if sp < 0 else "Pos")
+            else:
+                c[4].metric("2s10s", "—")
+        except Exception:
+            c[4].metric("2s10s", "—")
+        if defi_snap.get("total_tvl"):
+            c[5].metric("TVL", f"${defi_snap['total_tvl']/1e9:.1f}B")
+        else:
+            c[5].metric("TVL", "—")
 
-    st.caption("Charts & deep dives → **Crypto** · Head-to-head → **Compare** · Yields/FRED → **Macro**")
+        st.markdown("---")
+        left, right = st.columns(2)
+
+        with left:
+            st.markdown("##### Movers")
+            if not brief_data:
+                st.caption("Price data unavailable — try fewer tickers or another resolution.")
+            else:
+                rows = []
+                for t, df in brief_data.items():
+                    if df is None or len(df) < 2 or "close" not in df.columns:
+                        continue
+                    px = float(df["close"].iloc[-1])
+                    ch = (px / float(df["close"].iloc[-2]) - 1) * 100
+                    rsi = df["rsi"].iloc[-1] if "rsi" in df.columns else None
+                    rows.append({
+                        "Ticker": t.replace("-USD", ""),
+                        "Price": f"${px:,.2f}",
+                        "Chg": f"{ch:+.2f}%",
+                        "RSI": f"{float(rsi):.0f}" if rsi is not None and pd.notna(rsi) else "—",
+                    })
+                rows.sort(key=lambda r: float(r["Chg"].replace("%", "")), reverse=True)
+                if rows:
+                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        with right:
+            st.markdown("##### Funding / positioning")
+            frows = []
+            for t, df in (brief_data or {}).items():
+                if df is None or df.empty or "close" not in df.columns:
+                    continue
+                try:
+                    fut = get_futures_metrics(t, current_price=float(df["close"].iloc[-1]))
+                    fr = fut.get("funding_rate")
+                    frows.append({
+                        "Ticker": t.replace("-USD", ""),
+                        "Long%": f"{fut.get('long_pct', 50):.0f}",
+                        "Short%": f"{fut.get('short_pct', 50):.0f}",
+                        "Funding": f"{fr:+.3f}%" if fr is not None else "—",
+                    })
+                except Exception:
+                    continue
+            if frows:
+                st.dataframe(pd.DataFrame(frows), use_container_width=True, hide_index=True)
+            else:
+                st.caption("Futures metrics unavailable right now.")
+
+        st.markdown("##### Headlines")
+        try:
+            news = get_crypto_news(cache_buster=pd.Timestamp.now().strftime("%Y-%m-%d %H"))
+            if news:
+                for art in news[:5]:
+                    st.markdown(f"- **{art['source']}** — [{art['title']}]({art['link']})")
+            else:
+                st.caption("No headlines right now.")
+        except Exception:
+            st.caption("News feed unavailable.")
+
+        st.caption("Next: **Crypto** for charts · **Compare** for relative strength · **Macro** for yields & FRED")
 
 
-# ============================================================
-# COMPARE TAB
-# ============================================================
-with tab_compare:
+if nav == "🔀 Compare":
     st.subheader("🔀 Compare Assets")
     st.caption("Head-to-head returns, volatility, and relative performance for your loaded tickers.")
 
@@ -2052,7 +1971,7 @@ with tab_compare:
                     st.caption("Need ≥2 tickers with overlapping history.")
 
 
-with tab_crypto:
+if nav == "⚡ Crypto":
     if not tkrs:
         st.info("Enter at least one ticker in the sidebar.")
     else:
@@ -2285,7 +2204,7 @@ with tab_crypto:
                 fng_v, fng_c = get_fear_greed()
                 st.metric("Fear & Greed Index", f"{fng_v}/100", fng_c)
 
-with tab_macro:
+if nav == "🌐 Macro":
     st.subheader("🌐 Broad Market Telemetry Framework")
     st.caption("Equities • Yields • Commodities • Volatility • DeFi liquidity — free public feeds.")
     
@@ -2439,7 +2358,7 @@ with tab_macro:
 # ============================================================
 # PREDICTIVE ANALYTICS TAB
 # ============================================================
-with tab_predict:
+if nav == "🔮 Predictive":
     st.subheader("🔮 Multi-Factor Predictive Signal Engine")
     st.caption("Synthesizes Technicals • Futures Positioning • Sentiment • Macro into a single Bias Score. This is a decision-support tool, not financial advice.")
     
@@ -2587,7 +2506,7 @@ with tab_predict:
 # ============================================================
 # ANALYSIS TOOLS TAB
 # ============================================================
-with tab_analysis:
+if nav == "📊 Analysis":
     st.subheader("📊 Advanced Analysis Tools")
     st.caption("Correlation • Volatility • Multi-period Performance — all derived from the currently loaded tickers.")
 
@@ -2690,7 +2609,7 @@ with tab_analysis:
 # ============================================================
 # BACKTEST & TOOLS TAB (Phase 4)
 # ============================================================
-with tab_tools:
+if nav == "🛠️ Tools":
     st.subheader("🛠️ Backtesting • Multi-Timeframe • Export")
     
     tool_sub = st.radio(
