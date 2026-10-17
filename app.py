@@ -1650,6 +1650,30 @@ st.sidebar.header("Controls")
 if "main_tickers_value" not in st.session_state:
     st.session_state.main_tickers_value = "BTC-USD, ETH-USD, SOL-USD, XRP-USD"
 
+# Shareable URLs: ?tickers=BTC-USD,ETH-USD  (also accepts ?ticker=)
+if "url_tickers_applied" not in st.session_state:
+    st.session_state.url_tickers_applied = False
+if not st.session_state.url_tickers_applied:
+    try:
+        qp = st.query_params
+        raw = qp.get("tickers", None) or qp.get("ticker", None)
+        if raw:
+            if isinstance(raw, list):
+                raw = ",".join(raw)
+            parsed = [t.strip().upper() for t in str(raw).replace(" ", ",").split(",") if t.strip()]
+            # normalize: allow BTC -> BTC-USD for plain symbols
+            norm = []
+            for t in parsed:
+                if t and "-" not in t and t.isalpha() and len(t) <= 10:
+                    norm.append(t + "-USD")
+                else:
+                    norm.append(t)
+            if norm:
+                st.session_state.main_tickers_value = ", ".join(norm[:6])
+        st.session_state.url_tickers_applied = True
+    except Exception:
+        st.session_state.url_tickers_applied = True
+
 t_raw = st.sidebar.text_input(
     "Enter Tickers (commas):",
     value=st.session_state.main_tickers_value,
@@ -1665,6 +1689,22 @@ MAX_TICKERS = 6
 if len(tkrs) > MAX_TICKERS:
     st.sidebar.warning(f"Using first {MAX_TICKERS} tickers (max for speed).")
     tkrs = tkrs[:MAX_TICKERS]
+
+# Keep URL in sync so the address bar is shareable
+try:
+    if tkrs:
+        st.query_params["tickers"] = ",".join(tkrs)
+except Exception:
+    pass
+
+with st.sidebar.expander("🔗 Share this setup"):
+    if tkrs:
+        share_q = ",".join(tkrs)
+        st.caption("Copy your app URL from the browser, or build a link:")
+        st.code(f"?tickers={share_q}", language=None)
+        st.caption("Example: https://your-app.streamlit.app/?tickers=BTC-USD,ETH-USD")
+    else:
+        st.caption("Add tickers to generate a share link.")
 
 res_disp = st.sidebar.selectbox("Resolution", list(RESOLUTION_MAP.keys()))
 rf_rate = st.sidebar.slider("Refresh Rate (Seconds)", 15, 120, 45)
