@@ -1627,22 +1627,32 @@ show_onchain = st.sidebar.checkbox("Show On-chain Metrics", value=True)
 
 
 st.sidebar.subheader("🔑 Optional API Keys")
-fred_key_default = ""
+# Prefer secrets only — never put the real key into a widget (Streamlit password fields can be revealed via the eye icon)
+fred_api_key = ""
 try:
-    fred_key_default = st.secrets.get("fred_api_key", "") or ""
+    fred_api_key = (st.secrets.get("fred_api_key", "") or "").strip()
 except Exception:
-    pass
-fred_api_key = st.sidebar.text_input(
-    "FRED API Key (free)",
-    value=fred_key_default,
-    type="password",
-    help="Get a free key at https://fred.stlouisfed.org/docs/api/api_key.html — unlocks CPI, Fed Funds, M2, Unemployment, etc.",
-    key="fred_key_input"
-)
+    fred_api_key = ""
+
 if fred_api_key:
-    st.sidebar.caption("FRED key loaded ✓")
+    st.sidebar.caption("FRED key loaded from secrets ✓ (not shown in UI)")
 else:
-    st.sidebar.caption("Without a FRED key, built-in Yahoo macro still works.")
+    st.sidebar.caption(
+        "Add `fred_api_key` in Streamlit **Secrets** to unlock FRED data. "
+        "Get a free key: https://fred.stlouisfed.org/docs/api/api_key.html"
+    )
+    # Optional local-only paste: stored in session, not prefilled from secrets, cleared guidance
+    with st.sidebar.expander("Paste FRED key for this session only"):
+        _session_fred = st.text_input(
+            "FRED key (this session)",
+            value="",
+            type="password",
+            help="Used only until the app restarts. Prefer Secrets so the key is never shown in the UI.",
+            key="fred_key_session_only",
+        )
+        if _session_fred.strip():
+            fred_api_key = _session_fred.strip()
+            st.caption("Session key active (can still be revealed via the eye icon — Secrets is safer).")
 
 
 res_cfg = RESOLUTION_MAP[res_disp]
