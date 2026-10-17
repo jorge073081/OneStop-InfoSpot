@@ -226,6 +226,7 @@ def get_active_user_count(timeout_seconds: int = 90) -> int:
 # ============================================================
 import json
 import os
+from datetime import datetime
 
 WATCHLIST_FILE = "user_watchlist.json"
 PORTFOLIO_FILE = "user_portfolio.json"
@@ -243,7 +244,7 @@ def load_json_file(path: str, default=None):
     return default
 
 def save_json_file(path: str, data):
-    """Try to persist to disk. On Streamlit Cloud this may be ephemeral."""
+    """Local disk fallback (ephemeral on many hosts)."""
     try:
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
@@ -251,18 +252,108 @@ def save_json_file(path: str, data):
     except Exception:
         return False
 
+
+# ----- Supabase (optional multi-user persistence) -----
+@st.cache_resource
+def get_supabase_client():
+    """
+    Returns a supabase client if URL + key are configured, else None.
+    Secrets:
+      supabase_url = "https://xxxx.supabase.co"
+      supabase_key = "eyJ..."   # anon/public key is fine for this app pattern
+    """
+    url, key = "", ""
+    try:
+        url = st.secrets.get("supabase_url", "") or ""
+        key = st.secrets.get("supabase_key", "") or ""
+    except Exception:
+        pass
+    # Also allow session/sidebar override set later
+    if not url:
+        url = st.session_state.get("supabase_url_override", "") or ""
+    if not key:
+        key = st.session_state.get("supabase_key_override", "") or ""
+    if not url or not key:
+        return None
+    try:
+        from supabase import create_client
+        return create_client(url, key)
+    except Exception:
+        return None
+
+
+def _user_scope_id() -> str:
+    """Stable-ish per-browser scope for row ownership without full auth."""
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())
+    # Prefer explicit user label if set
+    label = st.session_state.get("persistence_user_id", "").strip()
+    if label:
+        return label[:64]
+    return st.session_state.session_id
+
+
 def load_watchlist() -> list:
+    sb = get_supabase_client()
+    if sb is not None:
+        try:
+            uid = _user_scope_id()
+            res = sb.table("watchlists").select("tickers").eq("user_id", uid).limit(1).execute()
+            rows = res.data or []
+            if rows and isinstance(rows[0].get("tickers"), list):
+                return rows[0]["tickers"]
+            return []
+        except Exception:
+            pass
     return load_json_file(WATCHLIST_FILE, [])
 
+
 def save_watchlist(tickers: list):
-    save_json_file(WATCHLIST_FILE, tickers)
+    sb = get_supabase_client()
+    if sb is not None:
+        try:
+            uid = _user_scope_id()
+            sb.table("watchlists").upsert({
+                "user_id": uid,
+                "tickers": tickers,
+                "updated_at": datetime.utcnow().isoformat() + "Z",
+            }).execute()
+            return True
+        except Exception:
+            pass
+    return save_json_file(WATCHLIST_FILE, tickers)
+
 
 def load_portfolio() -> list:
     """List of dicts: {ticker, qty, entry_price}"""
+    sb = get_supabase_client()
+    if sb is not None:
+        try:
+            uid = _user_scope_id()
+            res = sb.table("portfolios").select("holdings").eq("user_id", uid).limit(1).execute()
+            rows = res.data or []
+            if rows and isinstance(rows[0].get("holdings"), list):
+                return rows[0]["holdings"]
+            return []
+        except Exception:
+            pass
     return load_json_file(PORTFOLIO_FILE, [])
 
+
 def save_portfolio(portfolio: list):
-    save_json_file(PORTFOLIO_FILE, portfolio)
+    sb = get_supabase_client()
+    if sb is not None:
+        try:
+            uid = _user_scope_id()
+            sb.table("portfolios").upsert({
+                "user_id": uid,
+                "holdings": portfolio,
+                "updated_at": datetime.utcnow().isoformat() + "Z",
+            }).execute()
+            return True
+        except Exception:
+            pass
+    return save_json_file(PORTFOLIO_FILE, portfolio)
 
 
 # ============================================================
@@ -272,10 +363,33 @@ ALERTS_FILE = "user_alerts.json"
 
 def load_alerts() -> list:
     """List of alert dicts"""
+    sb = get_supabase_client()
+    if sb is not None:
+        try:
+            uid = _user_scope_id()
+            res = sb.table("alerts").select("rules").eq("user_id", uid).limit(1).execute()
+            rows = res.data or []
+            if rows and isinstance(rows[0].get("rules"), list):
+                return rows[0]["rules"]
+            return []
+        except Exception:
+            pass
     return load_json_file(ALERTS_FILE, [])
 
 def save_alerts(alerts: list):
-    save_json_file(ALERTS_FILE, alerts)
+    sb = get_supabase_client()
+    if sb is not None:
+        try:
+            uid = _user_scope_id()
+            sb.table("alerts").upsert({
+                "user_id": uid,
+                "rules": alerts,
+                "updated_at": datetime.utcnow().isoformat() + "Z",
+            }).execute()
+            return True
+        except Exception:
+            pass
+    return save_json_file(ALERTS_FILE, alerts)
 
 def check_alerts(alerts: list, data: dict, liquidity_profiles: dict, patterns_by_ticker: dict) -> list:
     """
@@ -567,6 +681,49 @@ def load_fred_dashboard(api_key: str) -> Dict[str, pd.DataFrame]:
         if df is not None and not df.empty:
             out[label] = df
     return out
+
+
+# ============================================================
+# SHARED / LAZY DATA LAYER (one fetch per ticker+resolution combo)
+# ============================================================
+def get_shared_market_data(tickers, interval, lookback, period, is_6h):
+    """Fetch once per unique config; reuse across tabs in the same run via session_state."""
+    key = ("mkt", tuple(tickers), interval, lookback, period, is_6h)
+    cache = st.session_state.setdefault("_data_cache", {})
+    # Soft TTL using timestamp
+    now = time.time()
+    entry = cache.get(key)
+    if entry and (now - entry.get("ts", 0)) < 45:
+        return entry["data"]
+    data = load_ticker_data(tuple(tickers), interval, lookback, period, is_6h) if tickers else {}
+    cache[key] = {"ts": now, "data": data}
+    # Prevent unbounded growth
+    if len(cache) > 12:
+        oldest = sorted(cache.items(), key=lambda x: x[1].get("ts", 0))[: len(cache) - 12]
+        for k, _ in oldest:
+            cache.pop(k, None)
+    return data
+
+
+def build_daily_briefing(tickers, data, fear_greed, macro_data, defi, alerts_triggered):
+    """Compact text/metrics package for the Briefing tab."""
+    lines = []
+    fng_v, fng_c = fear_greed if fear_greed else ("N/A", "N/A")
+    lines.append(f"Fear & Greed: {fng_v}/100 ({fng_c})")
+    if macro_data:
+        for name in ["VIX", "U.S. 10Y Treasury Yield", "DXY (U.S. Dollar Index)"]:
+            if name in macro_data and not macro_data[name].empty:
+                p = float(macro_data[name]["close"].iloc[-1])
+                lines.append(f"{name}: {p:.2f}")
+    if defi and defi.get("total_tvl"):
+        lines.append(f"Total Crypto TVL: ${defi['total_tvl']:,.0f}")
+    movers = []
+    for t, df in (data or {}).items():
+        if df is not None and len(df) > 1 and "close" in df.columns:
+            ch = (float(df["close"].iloc[-1]) / float(df["close"].iloc[-2]) - 1) * 100
+            movers.append((t, ch, float(df["close"].iloc[-1])))
+    movers.sort(key=lambda x: abs(x[1]), reverse=True)
+    return {"lines": lines, "movers": movers[:8], "alerts": alerts_triggered or []}
 
 # ============================================================
 # 3. ADVANCED TECHNICAL INDICATORS ALGORITHMS
@@ -1746,6 +1903,35 @@ if fred_api_key:
 else:
     st.sidebar.caption("Without a FRED key, built-in Yahoo macro still works.")
 
+st.sidebar.subheader("☁️ Supabase Persistence")
+sb_url_default, sb_key_default = "", ""
+try:
+    sb_url_default = st.secrets.get("supabase_url", "") or ""
+    sb_key_default = st.secrets.get("supabase_key", "") or ""
+except Exception:
+    pass
+
+with st.sidebar.expander("Supabase setup (optional)", expanded=False):
+    st.caption("Free tier: multi-user watchlist / portfolio / alerts. Leave empty to use local JSON.")
+    sb_url = st.text_input("Supabase URL", value=sb_url_default, key="sb_url_input")
+    sb_key = st.text_input("Supabase anon key", value=sb_key_default, type="password", key="sb_key_input")
+    user_label = st.text_input(
+        "Your user ID / nickname",
+        value=st.session_state.get("persistence_user_id", ""),
+        help="Same ID on phone + desktop = same watchlist/portfolio. Example: myname_2026",
+        key="persist_user_id_input"
+    )
+    if user_label.strip():
+        st.session_state.persistence_user_id = user_label.strip()
+    if sb_url.strip():
+        st.session_state.supabase_url_override = sb_url.strip()
+    if sb_key.strip():
+        st.session_state.supabase_key_override = sb_key.strip()
+    if get_supabase_client() is not None:
+        st.success("Supabase connected")
+    else:
+        st.caption("Not connected — using local JSON fallback.")
+
 res_cfg = RESOLUTION_MAP[res_disp]
 interval = res_cfg["interval"]
 lookback_bars = res_cfg["lookback"]
@@ -1774,20 +1960,211 @@ with col_users:
 
 st.caption("Dark mode • Candlesticks • Pattern Recognition • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro • 15Y Historical • Predictive Analytics")
 
-tab_crypto, tab_macro, tab_predict, tab_analysis, tab_tools, tab_portfolio = st.tabs([
-    "⚡ Crypto Intelligence Terminal",
-    "🌐 Global Macro Insights",
-    "🔮 Predictive Analytics",
-    "📊 Analysis Tools",
-    "🛠️ Backtest & Tools",
-    "⭐ Watchlist & Portfolio"
+tab_brief, tab_crypto, tab_compare, tab_macro, tab_predict, tab_analysis, tab_tools, tab_portfolio = st.tabs([
+    "☀️ Briefing",
+    "⚡ Crypto",
+    "🔀 Compare",
+    "🌐 Macro",
+    "🔮 Predictive",
+    "📊 Analysis",
+    "🛠️ Tools",
+    "⭐ Portfolio"
 ])
+
+
+# ============================================================
+# BRIEFING TAB (daily command center — light + cached)
+# ============================================================
+with tab_brief:
+    st.subheader("☀️ Daily Briefing")
+    st.caption("One-screen snapshot. Heavy charts live in other tabs — this view reuses cached data.")
+
+    # Light fetches (cached)
+    try:
+        fng_v, fng_c = get_fear_greed()
+    except Exception:
+        fng_v, fng_c = "N/A", "N/A"
+    try:
+        macro_snap = load_macro_data()
+    except Exception:
+        macro_snap = {}
+    try:
+        defi_snap = load_defi_overview()
+    except Exception:
+        defi_snap = {}
+
+    brief_data = {}
+    if tkrs:
+        brief_data = get_shared_market_data(tkrs, interval, lookback_bars, period, is_6h)
+
+    # Alert preview
+    brief_triggered = []
+    if st.session_state.get("alerts") and brief_data:
+        try:
+            temp_liq = {}
+            for t, hist in brief_data.items():
+                if not hist.empty and "close" in hist.columns:
+                    cpx = float(hist["close"].iloc[-1])
+                    fut = get_futures_metrics(t, current_price=cpx)
+                    temp_liq[t] = {"funding": fut.get("funding_rate")}
+            pats = {}
+            brief_triggered = check_alerts(st.session_state.alerts, brief_data, temp_liq, pats)
+        except Exception:
+            pass
+
+    # Top metrics row
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Fear & Greed", f"{fng_v}/100", fng_c)
+    if "VIX" in macro_snap and not macro_snap["VIX"].empty:
+        vix = float(macro_snap["VIX"]["close"].iloc[-1])
+        m2.metric("VIX", f"{vix:.1f}")
+    else:
+        m2.metric("VIX", "N/A")
+    if "U.S. 10Y Treasury Yield" in macro_snap and not macro_snap["U.S. 10Y Treasury Yield"].empty:
+        y10 = float(macro_snap["U.S. 10Y Treasury Yield"]["close"].iloc[-1])
+        m3.metric("US 10Y", f"{y10:.2f}%")
+    else:
+        m3.metric("US 10Y", "N/A")
+    if defi_snap.get("total_tvl"):
+        m4.metric("Crypto TVL", f"${defi_snap['total_tvl']/1e9:.1f}B")
+    else:
+        m4.metric("Crypto TVL", "N/A")
+
+    st.markdown("---")
+    c_left, c_right = st.columns(2)
+
+    with c_left:
+        st.markdown("### 📈 Watchlist / Ticker Movers")
+        if not brief_data:
+            st.info("Add tickers in the sidebar to see movers here.")
+        else:
+            rows = []
+            for t, df in brief_data.items():
+                if df is None or len(df) < 2 or "close" not in df.columns:
+                    continue
+                px = float(df["close"].iloc[-1])
+                ch = (px / float(df["close"].iloc[-2]) - 1) * 100
+                rsi = df["rsi"].iloc[-1] if "rsi" in df.columns else None
+                rows.append({
+                    "Ticker": t,
+                    "Price": f"${px:,.2f}",
+                    "Change": f"{ch:+.2f}%",
+                    "RSI": f"{float(rsi):.0f}" if rsi is not None and pd.notna(rsi) else "—",
+                })
+            rows = sorted(rows, key=lambda r: float(r["Change"].replace("%","")), reverse=True)
+            if rows:
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            else:
+                st.caption("No mover data yet.")
+
+    with c_right:
+        st.markdown("### 🔔 Alerts & Pulse")
+        if brief_triggered:
+            for msg in brief_triggered:
+                st.warning(msg)
+        else:
+            st.success("No active alert conditions firing right now.")
+        st.markdown("**Quick links**")
+        st.caption("Use the tabs above → Crypto for charts · Compare for head-to-head · Macro for yields/FRED · Portfolio for P&L.")
+
+    # Mini news
+    st.markdown("### 📰 Latest Headlines")
+    try:
+        news = get_crypto_news(cache_buster=pd.Timestamp.now().strftime("%Y-%m-%d %H"))
+        if news:
+            for art in news[:5]:
+                st.markdown(f"- **{art['source']}**: [{art['title']}]({art['link']})")
+        else:
+            st.caption("News feed quiet right now.")
+    except Exception:
+        st.caption("News unavailable.")
+
+
+# ============================================================
+# COMPARE TAB
+# ============================================================
+with tab_compare:
+    st.subheader("🔀 Compare Assets")
+    st.caption("Head-to-head returns, volatility, and relative performance for your loaded tickers.")
+
+    if not tkrs or len(tkrs) < 1:
+        st.info("Load 2+ tickers in the sidebar for the best comparison.")
+    else:
+        cmp_data = get_shared_market_data(tkrs, interval, lookback_bars, period, is_6h)
+        if not cmp_data:
+            st.warning("Could not load comparison data.")
+        else:
+            # Performance table
+            st.markdown("### Returns snapshot")
+            perf = compute_multi_period_performance(cmp_data)
+            if not perf.empty:
+                disp = perf.copy()
+                for col in ["1D %", "7D %", "30D %", "90D %", "YTD %"]:
+                    if col in disp.columns:
+                        disp[col] = disp[col].apply(lambda x: f"{x:+.2f}%" if pd.notna(x) else "N/A")
+                st.dataframe(disp.set_index("Ticker"), use_container_width=True)
+
+            # Normalized chart
+            st.markdown("### Normalized performance (session lookback)")
+            norm = pd.DataFrame()
+            for t, df in cmp_data.items():
+                if df is not None and not df.empty and "close" in df.columns:
+                    base = float(df["close"].iloc[0])
+                    if base:
+                        norm[t] = (df["close"] / base - 1) * 100
+            if not norm.empty:
+                fig = go.Figure()
+                for col in norm.columns:
+                    fig.add_trace(go.Scatter(x=norm.index, y=norm[col], name=col, line=dict(width=2)))
+                fig.update_layout(
+                    height=380, template="plotly_dark",
+                    paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
+                    margin=dict(l=10, r=10, t=20, b=10),
+                    legend=dict(orientation="h", y=1.1),
+                    font=dict(family="Outfit, sans-serif"),
+                    yaxis_title="% from start of window",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+            # Vol + correlation strip
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("### Volatility")
+                vol = compute_volatility_stats(cmp_data)
+                if not vol.empty:
+                    vdisp = vol.copy()
+                    vdisp["Price"] = vdisp["Price"].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "N/A")
+                    for col in ["Vol 7d (ann%)", "Vol 30d (ann%)", "ATR %"]:
+                        if col in vdisp.columns:
+                            vdisp[col] = vdisp[col].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A")
+                    if "ATR" in vdisp.columns:
+                        vdisp["ATR"] = vdisp["ATR"].apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "N/A")
+                    st.dataframe(vdisp.set_index("Ticker"), use_container_width=True)
+            with c2:
+                st.markdown("### Correlation")
+                corr = compute_correlation_matrix(cmp_data)
+                if not corr.empty and len(corr) >= 2:
+                    fig_c = go.Figure(data=go.Heatmap(
+                        z=corr.values, x=corr.columns.tolist(), y=corr.index.tolist(),
+                        colorscale="RdBu", zmid=0,
+                        text=np.round(corr.values, 2), texttemplate="%{text}",
+                    ))
+                    fig_c.update_layout(
+                        height=320, template="plotly_dark",
+                        paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
+                        margin=dict(l=10, r=10, t=10, b=10),
+                        font=dict(family="Outfit, sans-serif"),
+                    )
+                    st.plotly_chart(fig_c, use_container_width=True)
+                else:
+                    st.caption("Need ≥2 tickers with overlapping history.")
+
 
 with tab_crypto:
     if not tkrs:
         st.info("Enter at least one ticker in the sidebar.")
     else:
-        data = load_ticker_data(tuple(tkrs), interval, lookback_bars, period, is_6h)
+        data = get_shared_market_data(tkrs, interval, lookback_bars, period, is_6h)
         if not data:
             st.error("No valid data loaded. Check tickers or try a different resolution. Some data sources may be temporarily unavailable.")
         else:
