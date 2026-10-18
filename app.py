@@ -1529,6 +1529,9 @@ def build_asset_chart(
             pass
     # SMA200 is meaningless / flat on short intraday windows — auto-disable unless enough bars
     effective_sma200 = show_sma200 and "sma200" in h_data.columns and h_data["sma200"].notna().sum() >= 30
+    # Equal-width bars (TradingView-style) — eliminates visual time gaps on the right
+    time_index = h_data.index
+    x_pos = list(range(len(h_data)))
     if show_baseline and "close" in h_data.columns and len(h_data):
         h_data["baseline"] = h_data["close"].mean()
     if show_vwap and "volume" in h_data.columns:
@@ -1564,7 +1567,7 @@ def build_asset_chart(
     if show_candles and has_ohlc:
         fig.add_trace(
             go.Candlestick(
-                x=h_data.index,
+                x=x_pos,
                 open=h_data["open"], high=h_data["high"],
                 low=h_data["low"], close=h_data["close"],
                 name="Price",
@@ -1579,39 +1582,58 @@ def build_asset_chart(
     else:
         fig.add_trace(
             go.Scatter(
-                x=h_data.index, y=h_data["close"],
+                x=x_pos, y=h_data["close"],
                 name="Price", line=dict(color="#00FFFF", width=2),
             ),
             row=current_row, col=1,
         )
     if show_bb and "bb_upper" in h_data.columns:
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["bb_upper"], name="BB Upper",
+        fig.add_trace(go.Scatter(x=x_pos, y=h_data["bb_upper"], name="BB Upper",
                                  line=dict(color="rgba(255,255,255,0.3)", width=1), showlegend=False), row=current_row, col=1)
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["bb_lower"], name="BB Lower",
+        fig.add_trace(go.Scatter(x=x_pos, y=h_data["bb_lower"], name="BB Lower",
                                  line=dict(color="rgba(255,255,255,0.3)", width=1),
                                  fill="tonexty", fillcolor="rgba(0,255,127,0.08)"), row=current_row, col=1)
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["bb_mid"], name="BB Mid",
+        fig.add_trace(go.Scatter(x=x_pos, y=h_data["bb_mid"], name="BB Mid",
                                  line=dict(color="rgba(255,255,255,0.5)", width=1, dash="dot")), row=current_row, col=1)
     if show_sma50 and "sma50" in h_data.columns:
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["sma50"], name="SMA 50",
+        fig.add_trace(go.Scatter(x=x_pos, y=h_data["sma50"], name="SMA 50",
                                  line=dict(color="#00FF7F", width=1.5, dash="dash")), row=current_row, col=1)
     if effective_sma200:
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["sma200"], name="SMA 200",
+        fig.add_trace(go.Scatter(x=x_pos, y=h_data["sma200"], name="SMA 200",
                                  line=dict(color="#FF4500", width=1.5)), row=current_row, col=1)
     if show_baseline and "baseline" in h_data.columns:
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["baseline"], name="Hist. Baseline (Avg)",
+        fig.add_trace(go.Scatter(x=x_pos, y=h_data["baseline"], name="Hist. Baseline (Avg)",
                                  line=dict(color="#FFD700", width=1.8, dash="dot")), row=current_row, col=1)
     if show_vwap and "vwap" in h_data.columns:
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["vwap"], name="VWAP",
+        fig.add_trace(go.Scatter(x=x_pos, y=h_data["vwap"], name="VWAP",
                                  line=dict(color="#FF00FF", width=1.6)), row=current_row, col=1)
     
     # --- PATTERN OVERLAY ---
     if patterns:
-        fig = add_patterns_to_chart(fig, patterns, row=current_row)
+        # Map pattern timestamps → equal-width integer positions
+        mapped_patterns = []
+        for _p in (patterns or []):
+            _p = dict(_p)
+            try:
+                loc = time_index.get_loc(_p["index"])
+                if isinstance(loc, slice):
+                    loc = loc.start
+                if isinstance(loc, (int, np.integer)):
+                    _p["index"] = int(loc)
+                    mapped_patterns.append(_p)
+            except Exception:
+                try:
+                    loc = int(time_index.get_indexer([_p["index"]], method="nearest")[0])
+                    if loc >= 0:
+                        _p["index"] = loc
+                        mapped_patterns.append(_p)
+                except Exception:
+                    pass
+        fig = add_patterns_to_chart(fig, mapped_patterns, row=current_row)
     
     if show_rsi and "rsi" in h_data.columns:
         current_row += 1
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["rsi"], name="RSI",
+        fig.add_trace(go.Scatter(x=x_pos, y=h_data["rsi"], name="RSI",
                                  line=dict(color="#FFD700", width=1.5)), row=current_row, col=1)
         fig.add_hline(y=70, line_dash="dash", line_color="red", row=current_row, col=1)
         fig.add_hline(y=30, line_dash="dash", line_color="lime", row=current_row, col=1)
@@ -1620,24 +1642,24 @@ def build_asset_chart(
     if show_macd and "macd_hist" in h_data.columns:
         current_row += 1
         colors = ["#00FF7F" if v >= 0 else "#FF4500" for v in h_data["macd_hist"]]
-        fig.add_trace(go.Bar(x=h_data.index, y=h_data["macd_hist"], name="Histogram",
+        fig.add_trace(go.Bar(x=x_pos, y=h_data["macd_hist"], name="Histogram",
                              marker_color=colors, showlegend=False), row=current_row, col=1)
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["macd"], name="MACD",
+        fig.add_trace(go.Scatter(x=x_pos, y=h_data["macd"], name="MACD",
                                  line=dict(color="#00BFFF", width=1.5)), row=current_row, col=1)
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["macd_signal"], name="Signal",
+        fig.add_trace(go.Scatter(x=x_pos, y=h_data["macd_signal"], name="Signal",
                                  line=dict(color="#FF69B4", width=1.5)), row=current_row, col=1)
     if show_stoch and "stoch_k" in h_data.columns:
         current_row += 1
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["stoch_k"], name="%K",
+        fig.add_trace(go.Scatter(x=x_pos, y=h_data["stoch_k"], name="%K",
                                  line=dict(color="#00FFFF", width=1.5)), row=current_row, col=1)
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["stoch_d"], name="%D",
+        fig.add_trace(go.Scatter(x=x_pos, y=h_data["stoch_d"], name="%D",
                                  line=dict(color="#FFD700", width=1.5)), row=current_row, col=1)
         fig.add_hline(y=80, line_dash="dash", line_color="red", row=current_row, col=1)
         fig.add_hline(y=20, line_dash="dash", line_color="lime", row=current_row, col=1)
         fig.update_yaxes(range=[0, 100], row=current_row, col=1)
     if show_atr and "atr" in h_data.columns:
         current_row += 1
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["atr"], name="ATR",
+        fig.add_trace(go.Scatter(x=x_pos, y=h_data["atr"], name="ATR",
                                  line=dict(color="#FF8C00", width=1.8)), row=current_row, col=1)
     if show_vol_profile and "volume" in h_data.columns:
         current_row += 1
@@ -1652,7 +1674,7 @@ def build_asset_chart(
             pass
     if show_vs_btc and "vs_btc" in h_data.columns:
         current_row += 1
-        fig.add_trace(go.Scatter(x=h_data.index, y=h_data["vs_btc"], name="vs BTC %",
+        fig.add_trace(go.Scatter(x=x_pos, y=h_data["vs_btc"], name="vs BTC %",
                                  line=dict(color="#00FFAA", width=1.8)), row=current_row, col=1)
         fig.add_hline(y=0, line_dash="dash", line_color="gray", row=current_row, col=1)
     fig.update_layout(
@@ -1665,21 +1687,23 @@ def build_asset_chart(
         xaxis_rangeslider_visible=False,
         font=dict(family="Outfit, sans-serif"),
     )
-    # After gap cleanup, pin x-axis tightly to remaining bars
-    x_range = None
-    if len(h_data) > 0:
-        x0, x1 = h_data.index[0], h_data.index[-1]
+    # Equal-width x-axis: no time gaps, chart always fills the panel
+    n = len(h_data)
+    tick_step = max(1, n // 6) if n else 1
+    tickvals = list(range(0, n, tick_step)) if n else []
+    ticktext = []
+    for i in tickvals:
         try:
-            span = pd.Timestamp(x1) - pd.Timestamp(x0)
-            pad = span * 0.01 if span > pd.Timedelta(0) else pd.Timedelta(minutes=5)
-            x_range = [pd.Timestamp(x0), pd.Timestamp(x1) + pad]
+            ticktext.append(pd.Timestamp(time_index[i]).strftime("%m/%d %H:%M"))
         except Exception:
-            x_range = [x0, x1]
+            ticktext.append(str(time_index[i])[:16])
     for i in range(1, rows + 1):
         fig.update_xaxes(
             rangeslider_visible=False,
-            range=x_range,
-            autorange=False if x_range else True,
+            range=[-0.5, max(n - 0.5, 0.5)],
+            tickvals=tickvals,
+            ticktext=ticktext,
+            autorange=False,
             row=i, col=1,
         )
     return fig
