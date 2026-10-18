@@ -1850,7 +1850,7 @@ with st.sidebar.expander("🔗 Share this setup"):
         st.caption("Add tickers to generate a share link.")
 
 res_disp = st.sidebar.selectbox("Resolution", list(RESOLUTION_MAP.keys()))
-rf_rate = st.sidebar.slider("Refresh Rate (Seconds)", 15, 120, 45)
+rf_rate = st.sidebar.slider("Refresh Rate (Seconds)", 30, 300, 90)
 
 st.sidebar.subheader("Charts")
 show_candles = st.sidebar.checkbox("Candlesticks", value=True)
@@ -2237,7 +2237,16 @@ if nav == "⚡ Crypto":
                 st.plotly_chart(fig, use_container_width=True)
             
             st.subheader("🔥 Asset Analysis Frameworks")
-            m_tgt = st.selectbox("Select Target Asset:", list(liquidity_profiles.keys()))
+            asset_options = list(liquidity_profiles.keys()) if liquidity_profiles else list(data.keys())
+            # Persist selection across auto-refresh (widget key + validate against current options)
+            if asset_options:
+                if "target_asset_select" not in st.session_state or st.session_state.target_asset_select not in asset_options:
+                    st.session_state.target_asset_select = asset_options[0]
+            m_tgt = st.selectbox(
+                "Select Target Asset:",
+                asset_options,
+                key="target_asset_select",
+            )
             if m_tgt and m_tgt in data:
                 h_data = data[m_tgt].copy()
                 if show_long_baseline:
