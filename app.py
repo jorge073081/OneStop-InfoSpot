@@ -1908,6 +1908,14 @@ def build_asset_chart(
         legend=dict(orientation="h", y=1.02),
         xaxis_rangeslider_visible=False,
         font=dict(family="Outfit, sans-serif"),
+        # Drawing tools (trend lines, zones, freehand) — used with Plotly modebar
+        dragmode="zoom",
+        newshape=dict(
+            line=dict(color="#00FFFF", width=2),
+            fillcolor="rgba(0, 255, 255, 0.12)",
+            opacity=1,
+            label=dict(texttemplate="", font=dict(size=11, color="#fafafa")),
+        ),
     )
     # Equal-width x-axis: no time gaps, chart always fills the panel
     n = len(h_data)
@@ -2433,7 +2441,27 @@ if nav == "⚡ Crypto":
                         ),
                         row=1, col=1,
                     )
-                st.plotly_chart(fig, use_container_width=True)
+                st.caption(
+                    "✏️ **Draw tools** (chart toolbar): line · freehand · circle · rectangle · erase. "
+                    "Use rectangle for zones, line for trendlines. Double‑click a shape to select · erase to remove."
+                )
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True,
+                    config={
+                        "displaylogo": False,
+                        "scrollZoom": True,
+                        "modeBarButtonsToAdd": [
+                            "drawline",
+                            "drawopenpath",
+                            "drawcircle",
+                            "drawrect",
+                            "eraseshape",
+                        ],
+                        "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+                    },
+                    key=f"asset_chart_{m_tgt}",
+                )
 
                 # Volume-by-price profile (price on Y axis) — separate chart so axes stay correct
                 if show_vol_profile:
