@@ -921,6 +921,9 @@ def _fetch_one_ticker(t: str, interval: str, lookback: int, period: str, is_6h: 
         if not hist.empty:
             hist = add_indicators(hist)
             display = hist.iloc[-lookback:] if len(hist) >= lookback else hist
+            # Trim empty trailing closes so charts don't pad blank space
+            if "close" in display.columns:
+                display = display.dropna(subset=["close"])
             return t, display
     except Exception:
         pass
@@ -1501,7 +1504,14 @@ def build_asset_chart(
     patterns: Optional[List[Dict]] = None,
 ) -> go.Figure:
     h_data = h_data.copy()
-    if show_baseline:
+    # --- Chart cutoff fixes ---
+    # Drop rows with no close; drop trailing NaN-only tail so the x-axis doesn't pad empty space
+    if "close" in h_data.columns:
+        h_data = h_data.dropna(subset=["close"])
+    h_data = h_data.loc[: h_data.last_valid_index()] if len(h_data) else h_data
+    # SMA200 is meaningless / flat on short intraday windows — auto-disable unless enough bars
+    effective_sma200 = show_sma200 and "sma200" in h_data.columns and h_data["sma200"].notna().sum() >= 30
+    if show_baseline and "close" in h_data.columns and len(h_data):
         h_data["baseline"] = h_data["close"].mean()
     if show_vwap and "volume" in h_data.columns:
         h_data["vwap"] = (h_data["close"] * h_data["volume"]).cumsum() / h_data["volume"].cumsum()
@@ -1567,7 +1577,7 @@ def build_asset_chart(
     if show_sma50 and "sma50" in h_data.columns:
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["sma50"], name="SMA 50",
                                  line=dict(color="#00FF7F", width=1.5, dash="dash")), row=current_row, col=1)
-    if show_sma200 and "sma200" in h_data.columns:
+    if effective_sma200:
         fig.add_trace(go.Scatter(x=h_data.index, y=h_data["sma200"], name="SMA 200",
                                  line=dict(color="#FF4500", width=1.5)), row=current_row, col=1)
     if show_baseline and "baseline" in h_data.columns:
@@ -1632,13 +1642,22 @@ def build_asset_chart(
         template="plotly_dark",
         paper_bgcolor="#0e1117",
         plot_bgcolor="#0e1117",
-        margin=dict(l=10, r=10, t=40, b=10),
+        margin=dict(l=10, r=12, t=40, b=10),
         legend=dict(orientation="h", y=1.02),
         xaxis_rangeslider_visible=False,
         font=dict(family="Outfit, sans-serif"),
     )
+    # Pin all shared x-axes to actual data range (stops empty right-side cutoff)
+    x_range = None
+    if len(h_data) > 0:
+        x_range = [h_data.index[0], h_data.index[-1]]
     for i in range(1, rows + 1):
-        fig.update_xaxes(rangeslider_visible=False, row=i, col=1)
+        fig.update_xaxes(
+            rangeslider_visible=False,
+            range=x_range,
+            autorange=False if x_range else True,
+            row=i, col=1,
+        )
     return fig
 
 # ============================================================
@@ -1649,6 +1668,30 @@ st.sidebar.header("Controls")
 # --- MAIN TICKER INPUT (session-state driven so Watchlist can update it) ---
 if "main_tickers_value" not in st.session_state:
     st.session_state.main_tickers_value = "BTC-USD, ETH-USD, SOL-USD, XRP-USD"
+
+# Shareable URLs: ?tickers=BTC-USD,ETH-USD  (also accepts ?ticker=)
+if "url_tickers_applied" not in st.session_state:
+    st.session_state.url_tickers_applied = False
+if not st.session_state.url_tickers_applied:
+    try:
+        qp = st.query_params
+        raw = qp.get("tickers", None) or qp.get("ticker", None)
+        if raw:
+            if isinstance(raw, list):
+                raw = ",".join(raw)
+            parsed = [t.strip().upper() for t in str(raw).replace(" ", ",").split(",") if t.strip()]
+            # normalize: allow BTC -> BTC-USD for plain symbols
+            norm = []
+            for t in parsed:
+                if t and "-" not in t and t.isalpha() and len(t) <= 10:
+                    norm.append(t + "-USD")
+                else:
+                    norm.append(t)
+            if norm:
+                st.session_state.main_tickers_value = ", ".join(norm[:6])
+        st.session_state.url_tickers_applied = True
+    except Exception:
+        st.session_state.url_tickers_applied = True
 
 t_raw = st.sidebar.text_input(
     "Enter Tickers (commas):",
@@ -1665,6 +1708,22 @@ MAX_TICKERS = 6
 if len(tkrs) > MAX_TICKERS:
     st.sidebar.warning(f"Using first {MAX_TICKERS} tickers (max for speed).")
     tkrs = tkrs[:MAX_TICKERS]
+
+# Keep URL in sync so the address bar is shareable
+try:
+    if tkrs:
+        st.query_params["tickers"] = ",".join(tkrs)
+except Exception:
+    pass
+
+with st.sidebar.expander("🔗 Share this setup"):
+    if tkrs:
+        share_q = ",".join(tkrs)
+        st.caption("Copy your app URL from the browser, or build a link:")
+        st.code(f"?tickers={share_q}", language=None)
+        st.caption("Example: https://your-app.streamlit.app/?tickers=BTC-USD,ETH-USD")
+    else:
+        st.caption("Add tickers to generate a share link.")
 
 res_disp = st.sidebar.selectbox("Resolution", list(RESOLUTION_MAP.keys()))
 rf_rate = st.sidebar.slider("Refresh Rate (Seconds)", 15, 120, 45)
