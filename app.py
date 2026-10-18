@@ -1392,6 +1392,109 @@ def get_fear_greed() -> Tuple[str, str]:
         return "N/A", "Unavailable"
 
 @st.cache_data(ttl=90, show_spinner="Fetching fresh crypto news...")
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_equity_snapshot(symbol: str) -> Dict[str, Any]:
+    """Free Yahoo snapshot for stocks/ETFs (best-effort fields)."""
+    sym = (symbol or "").strip().upper()
+    out = {"Symbol": sym, "Error": None}
+    if not sym:
+        out["Error"] = "No symbol"
+        return out
+    try:
+        t = yf.Ticker(sym)
+        info = {}
+        try:
+            info = t.fast_info or {}
+        except Exception:
+            info = {}
+        # fast_info may be object-like
+        def _get(obj, *keys):
+            for k in keys:
+                try:
+                    if isinstance(obj, dict) and k in obj and obj[k] is not None:
+                        return obj[k]
+                    v = getattr(obj, k, None)
+                    if v is not None:
+                        return v
+                except Exception:
+                    pass
+            return None
+        price = _get(info, "last_price", "lastPrice", "regularMarketPrice")
+        prev = _get(info, "previous_close", "previousClose")
+        day_h = _get(info, "day_high", "dayHigh")
+        day_l = _get(info, "day_low", "dayLow")
+        yr_h = _get(info, "year_high", "fiftyTwoWeekHigh")
+        yr_l = _get(info, "year_low", "fiftyTwoWeekLow")
+        mcap = _get(info, "market_cap", "marketCap")
+        vol = _get(info, "last_volume", "lastVolume", "volume")
+        # richer info (slower / sometimes empty on free)
+        try:
+            inf = t.info or {}
+        except Exception:
+            inf = {}
+        out.update({
+            "Name": inf.get("shortName") or inf.get("longName") or sym,
+            "Price": price,
+            "Prev Close": prev,
+            "Day Range": f"{day_l} – {day_h}" if day_l and day_h else None,
+            "52W Range": f"{yr_l} – {yr_h}" if yr_l and yr_h else None,
+            "Market Cap": mcap,
+            "Volume": vol,
+            "PE": inf.get("trailingPE") or inf.get("forwardPE"),
+            "Forward PE": inf.get("forwardPE"),
+            "EPS": inf.get("trailingEps"),
+            "Sector": inf.get("sector"),
+            "Industry": inf.get("industry"),
+            "Avg Volume": inf.get("averageVolume") or inf.get("averageVolume10days"),
+            "Dividend Yield": inf.get("dividendYield"),
+            "As Of": pd.Timestamp.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        })
+        return out
+    except Exception as e:
+        out["Error"] = str(e)[:120]
+        return out
+
+
+def filter_news_for_tickers(news: List[Dict], tickers: List[str]) -> List[Dict]:
+    """Return headlines that mention any loaded ticker (symbol or common name)."""
+    if not news or not tickers:
+        return []
+    aliases = {
+        "BTC": ["bitcoin", "btc"],
+        "ETH": ["ethereum", "ether", "eth"],
+        "SOL": ["solana", "sol"],
+        "XRP": ["xrp", "ripple"],
+        "AAPL": ["apple", "aapl"],
+        "MSFT": ["microsoft", "msft"],
+        "NVDA": ["nvidia", "nvda"],
+        "AMZN": ["amazon", "amzn"],
+        "GOOGL": ["google", "alphabet", "googl"],
+        "GOOG": ["google", "alphabet", "goog"],
+        "META": ["meta", "facebook"],
+        "TSLA": ["tesla", "tsla"],
+        "SPY": ["s&p", "sp500", "s&p 500", "spy"],
+        "QQQ": ["nasdaq", "qqq"],
+    }
+    keys = []
+    for t in tickers:
+        base = t.upper().replace("-USD", "").replace("USDT", "").strip()
+        keys.append(base.lower())
+        for a in aliases.get(base, []):
+            keys.append(a.lower())
+        keys.append(t.lower())
+    keys = list(set(keys))
+    hits = []
+    for art in news:
+        blob = f"{art.get('title','')} {art.get('summary','')}".lower()
+        matched = [k for k in keys if k and k in blob]
+        if matched:
+            a = dict(art)
+            a["matched"] = ", ".join(sorted(set(matched))[:4])
+            hits.append(a)
+    return hits
+
+
 @st.cache_data(ttl=900, show_spinner="Fetching market news…")
 def get_market_news(cache_buster: str = "", max_items: int = 40) -> List[Dict]:
     """
@@ -2362,6 +2465,24 @@ with col_users:
 st.caption("Dark mode • Candlesticks • Pattern Recognition • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro • 15Y Historical • Predictive Analytics")
 
 # Radio nav = only the active section runs heavy code (faster than st.tabs)
+# Optional deep-link: ?view=briefing|crypto|compare|macro|screener
+_view_map = {
+    "briefing": "☀️ Briefing",
+    "crypto": "⚡ Crypto",
+    "compare": "🔀 Compare",
+    "macro": "🌐 Macro",
+    "predictive": "🔮 Predictive",
+    "analysis": "📊 Analysis",
+    "screener": "🔎 Screener",
+    "tools": "🛠️ Tools",
+}
+try:
+    _vq = (st.query_params.get("view") or "").lower()
+    if _vq in _view_map and "main_nav" not in st.session_state:
+        st.session_state.main_nav = _view_map[_vq]
+except Exception:
+    pass
+
 nav = st.radio(
     "Navigate",
     ["☀️ Briefing", "⚡ Crypto", "🔀 Compare", "🌐 Macro", "🔮 Predictive", "📊 Analysis", "🔎 Screener", "🛠️ Tools"],
@@ -2378,29 +2499,31 @@ nav = st.radio(
 # ============================================================
 
 if nav == "☀️ Briefing":
-    st.subheader("☀️ Daily Briefing")
-    st.caption("What matters right now — then go deeper in Crypto, Compare, or Macro.")
-
+    _asof = pd.Timestamp.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    st.subheader("☀️ Morning Brief")
+    st.caption(f"Cross-asset desk · stocks + crypto + policy · **as of {_asof}**")
     if not tkrs:
-        st.info("👈 Add up to 6 tickers in the sidebar to begin.")
-    else:
-        # Lightweight parallel-ish loads (all cached)
-        try:
-            fng_v, fng_c = get_fear_greed()
-        except Exception:
-            fng_v, fng_c = "—", "—"
-        try:
-            macro_snap = load_macro_data()
-        except Exception:
-            macro_snap = {}
-        try:
-            defi_snap = load_defi_overview()
-        except Exception:
-            defi_snap = {}
+        st.info("Add tickers in the sidebar for movers, funding, and equity snapshots. Board, calendar, sectors & news still load below.")
 
+    # Always load light desk data (even with no tickers)
+    try:
+        fng_v, fng_c = get_fear_greed()
+    except Exception:
+        fng_v, fng_c = "—", "—"
+    try:
+        macro_snap = load_macro_data()
+    except Exception:
+        macro_snap = {}
+    try:
+        defi_snap = load_defi_overview()
+    except Exception:
+        defi_snap = {}
+    brief_data = {}
+    if tkrs:
         with st.spinner("Loading briefing…"):
             brief_data = get_shared_market_data(tkrs, interval, lookback_bars, period, is_6h)
 
+    if True:  # keep indentation structure for rest of briefing body
         # --- Regime one-liner ---
         regime = "Mixed"
         try:
@@ -2581,13 +2704,12 @@ if nav == "☀️ Briefing":
                 st.caption("Futures metrics unavailable right now.")
 
         st.markdown("##### Market-moving headlines")
-        st.caption("Fed · SEC · Stocks · Crypto — free RSS, refreshed ~15 min")
+        st.caption(f"Fed · SEC · Stocks · Crypto — free RSS · as of {_asof}")
         try:
-            news = get_market_news(cache_buster=pd.Timestamp.now().strftime("%Y-%m-%d %H"), max_items=36)
+            news = get_market_news(cache_buster=pd.Timestamp.now().strftime("%Y-%m-%d %H"), max_items=40)
             if not news:
                 st.caption("No headlines right now.")
             else:
-                # Show a balanced mix by category
                 order = ["Fed", "SEC", "Stocks", "Crypto"]
                 cols = st.columns(4)
                 for i, cat in enumerate(order):
@@ -2601,10 +2723,60 @@ if nav == "☀️ Briefing":
                             link = art.get("link") or "#"
                             src = art.get("source") or ""
                             st.markdown(f"- [{title}]({link}) · *{src}*")
+
+                # B) Ticker-aware news
+                if tkrs:
+                    hits = filter_news_for_tickers(news, tkrs)
+                    st.markdown("##### Related to your tickers")
+                    if hits:
+                        for art in hits[:8]:
+                            title = (art.get("title") or "")[:110]
+                            link = art.get("link") or "#"
+                            src = art.get("source") or ""
+                            matched = art.get("matched") or ""
+                            st.markdown(f"- [{title}]({link}) · *{src}* · matched: `{matched}`")
+                    else:
+                        st.caption("No headlines matched your current tickers in the latest feed pull.")
         except Exception:
             st.caption("News feed unavailable.")
 
-        st.caption("Next: **Crypto** for charts · **Compare** for relative strength · **Macro** for yields & FRED")
+        # C) Equity snapshots for stock/ETF tickers (skip pure crypto -USD pairs)
+        if tkrs:
+            stockish = [t for t in tkrs if not str(t).upper().endswith("-USD")]
+            # also allow plain crypto symbols without snapshot spam
+            stockish = [t for t in stockish if t.upper() not in {"BTC", "ETH", "SOL", "XRP", "DOGE", "ADA"}]
+            if stockish:
+                st.markdown("##### Equity snapshots")
+                st.caption("Yahoo free fields — PE/sector may be blank for some ETFs")
+                cols = st.columns(min(3, len(stockish)))
+                for i, sym in enumerate(stockish[:6]):
+                    with cols[i % len(cols)]:
+                        snap = get_equity_snapshot(sym)
+                        if snap.get("Error"):
+                            st.warning(f"{sym}: {snap['Error']}")
+                            continue
+                        st.markdown(f"**{snap.get('Name') or sym}** (`{sym}`)")
+                        px = snap.get("Price")
+                        st.write(f"Price: **{px:,.2f}**" if isinstance(px, (int, float)) else f"Price: {px or '—'}")
+                        mcap = snap.get("Market Cap")
+                        if isinstance(mcap, (int, float)) and mcap:
+                            if mcap >= 1e12:
+                                mc_s = f"${mcap/1e12:.2f}T"
+                            elif mcap >= 1e9:
+                                mc_s = f"${mcap/1e9:.1f}B"
+                            else:
+                                mc_s = f"${mcap/1e6:.0f}M"
+                            st.write(f"Market cap: {mc_s}")
+                        pe = snap.get("PE")
+                        if isinstance(pe, (int, float)):
+                            st.write(f"PE: {pe:.1f}")
+                        if snap.get("Sector"):
+                            st.write(f"{snap.get('Sector')} · {snap.get('Industry') or ''}")
+                        if snap.get("52W Range"):
+                            st.caption(f"52W: {snap['52W Range']}")
+                        st.caption(snap.get("As Of") or "")
+
+        st.caption("Next: **Crypto** for charts · **Compare** for relative strength · **Macro** for yields & FRED · **Screener** for leaders")
 
 
 if nav == "🔀 Compare":
