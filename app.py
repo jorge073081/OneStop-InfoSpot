@@ -18,7 +18,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # ============================================================
 # 1. INITIAL SETUP & MATRIX INTERFACE STYLE SYSTEM
 # ============================================================
-nltk.download("vader_lexicon", quiet=True)
+try:
+    nltk.download("vader_lexicon", quiet=True)
+except Exception:
+    pass  # non-fatal; sentiment features degrade gracefully
 
 st.set_page_config(
     page_title="OneStop-InfoSpot | Asset Intelligence Terminal",
@@ -2409,7 +2412,10 @@ with st.sidebar.expander("🔗 Share this setup"):
         st.caption("Add tickers to generate a share link.")
 
 res_disp = st.sidebar.selectbox("Resolution", list(RESOLUTION_MAP.keys()))
-rf_rate = st.sidebar.slider("Refresh Rate (Seconds)", 30, 300, 90)
+# Fixed refresh — users cannot change this (protects free APIs under traffic)
+FIXED_REFRESH_SEC = 180
+rf_rate = FIXED_REFRESH_SEC
+st.sidebar.caption("Auto-refresh every 3 minutes (fixed)")
 
 st.sidebar.subheader("Charts")
 show_candles = st.sidebar.checkbox("Candlesticks", value=True)
@@ -2471,18 +2477,11 @@ st_autorefresh(interval=rf_rate * 1000, key="datarefresh")
 # ============================================================
 # 7. MAIN LAYOUT
 # ============================================================
-active_users = get_active_user_count(timeout_seconds=90)
 
 
 
-# Title — active users sit under subtitle on narrow layouts via simple stack
-col_title, col_users = st.columns([4, 1.2])
-with col_title:
-    st.markdown('<div class="silver-title">OneStop-InfoSpot</div>', unsafe_allow_html=True)
-    st.markdown('<div class="silver-subtitle">Market intelligence desk · stocks · crypto · macro</div>', unsafe_allow_html=True)
-with col_users:
-    st.metric("Active", active_users)
-
+st.markdown('<div class="silver-title">OneStop-InfoSpot</div>', unsafe_allow_html=True)
+st.markdown('<div class="silver-subtitle">Market intelligence desk · stocks · crypto · macro</div>', unsafe_allow_html=True)
 st.caption("Dark mode • Candlesticks • Pattern Recognition • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro • 15Y Historical • Predictive Analytics")
 
 # Radio nav = only the active section runs heavy code (faster than st.tabs)
