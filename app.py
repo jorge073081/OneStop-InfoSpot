@@ -673,6 +673,81 @@ def load_sector_board() -> pd.DataFrame:
     df = pd.DataFrame(rows).sort_values("1D %", ascending=False)
     return df
 
+
+# Popular liquid universe for free screening (Yahoo symbols)
+SCREENER_UNIVERSE = [
+    # Indices / ETFs
+    "SPY", "QQQ", "IWM", "DIA", "SMH", "XLF", "XLE", "XLK", "XLV", "ARKK",
+    # Mega / large cap
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "BRK-B", "JPM", "V",
+    "UNH", "XOM", "JNJ", "WMT", "MA", "PG", "HD", "CVX", "ABBV", "MRK",
+    "KO", "PEP", "AVGO", "COST", "LLY", "AMD", "NFLX", "CRM", "ORCL", "ADBE",
+    "INTC", "QCOM", "TXN", "IBM", "BA", "CAT", "GE", "DIS", "NKE", "SBUX",
+    "PYPL", "SQ", "SHOP", "UBER", "ABNB", "COIN", "HOOD", "PLTR", "SNOW", "PANW",
+    "NOW", "INTU", "AMAT", "LRCX", "MU", "ARM", "TSM", "BABA", "NIO", "RIVN",
+    "F", "GM", "T", "VZ", "CMCSA", "PFE", "MRNA", "BMY", "GILD", "AMGN",
+]
+
+@st.cache_data(ttl=180, show_spinner="Running screener…")
+def run_stock_screener(symbols: Tuple[str, ...]) -> pd.DataFrame:
+    """Fetch daily metrics for a symbol list and return a screenable table."""
+    def _one(sym: str):
+        try:
+            t = yf.Ticker(sym)
+            h = t.history(period="6mo", interval="1d", auto_adjust=True)
+            if h is None or len(h) < 30 or "Close" not in h.columns:
+                return None
+            close = h["Close"]
+            vol = h["Volume"] if "Volume" in h.columns else None
+            px = float(close.iloc[-1])
+            prev = float(close.iloc[-2])
+            d1 = (px / prev - 1) * 100
+            d5 = (px / float(close.iloc[-6]) - 1) * 100 if len(close) > 6 else np.nan
+            d21 = (px / float(close.iloc[-22]) - 1) * 100 if len(close) > 22 else np.nan
+            # RSI 14
+            delta = close.diff()
+            gain = delta.where(delta > 0, 0.0)
+            loss = -delta.where(delta < 0, 0.0)
+            avg_g = gain.ewm(alpha=1/14, min_periods=14).mean()
+            avg_l = loss.ewm(alpha=1/14, min_periods=14).mean()
+            rs = avg_g / avg_l.replace(0, np.nan)
+            rsi = float((100 - (100 / (1 + rs))).iloc[-1])
+            sma50 = float(close.tail(50).mean()) if len(close) >= 50 else float(close.mean())
+            sma200 = float(close.tail(200).mean()) if len(close) >= 200 else np.nan
+            avg_vol = float(vol.tail(20).mean()) if vol is not None and len(vol) >= 5 else np.nan
+            last_vol = float(vol.iloc[-1]) if vol is not None else np.nan
+            rel_vol = (last_vol / avg_vol) if avg_vol and avg_vol > 0 else np.nan
+            return {
+                "Symbol": sym,
+                "Price": px,
+                "1D %": d1,
+                "5D %": d5,
+                "1M %": d21,
+                "RSI": rsi,
+                "vs SMA50 %": (px / sma50 - 1) * 100 if sma50 else np.nan,
+                "vs SMA200 %": (px / sma200 - 1) * 100 if sma200 and not np.isnan(sma200) else np.nan,
+                "Rel Vol": rel_vol,
+                "Above SMA50": px > sma50,
+                "Above SMA200": px > sma200 if sma200 and not np.isnan(sma200) else False,
+            }
+        except Exception:
+            return None
+
+    rows = []
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        futs = {ex.submit(_one, s): s for s in symbols}
+        for fut in as_completed(futs):
+            try:
+                r = fut.result()
+                if r:
+                    rows.append(r)
+            except Exception:
+                pass
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows)
+
+
 def get_shared_market_data(tickers, interval, lookback, period, is_6h):
     """Fetch once per unique config; reuse across tabs in the same run via session_state."""
     key = ("mkt", tuple(tickers), interval, lookback, period, is_6h)
@@ -2256,7 +2331,7 @@ st.caption("Dark mode • Candlesticks • Pattern Recognition • Long/Short Al
 # Radio nav = only the active section runs heavy code (faster than st.tabs)
 nav = st.radio(
     "Navigate",
-    ["☀️ Briefing", "⚡ Crypto", "🔀 Compare", "🌐 Macro", "🔮 Predictive", "📊 Analysis", "🛠️ Tools"],
+    ["☀️ Briefing", "⚡ Crypto", "🔀 Compare", "🌐 Macro", "🔮 Predictive", "📊 Analysis", "🔎 Screener", "🛠️ Tools"],
     horizontal=True,
     label_visibility="collapsed",
     key="main_nav",
@@ -3253,6 +3328,93 @@ if nav == "📊 Analysis":
 # ============================================================
 # BACKTEST & TOOLS TAB (Phase 4)
 # ============================================================
+
+if nav == "🔎 Screener":
+    st.subheader("🔎 Stock Screener")
+    st.caption("Free Yahoo-based screen of a liquid US stock/ETF universe. Not investable advice — data can lag.")
+
+    universe = tuple(SCREENER_UNIVERSE)
+    with st.expander("Universe", expanded=False):
+        st.write(", ".join(universe))
+        st.caption(f"{len(universe)} symbols")
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        min_1d = st.number_input("Min 1D %", value=-100.0, step=0.5)
+        max_1d = st.number_input("Max 1D %", value=100.0, step=0.5)
+    with c2:
+        min_rsi = st.slider("Min RSI", 0, 100, 0)
+        max_rsi = st.slider("Max RSI", 0, 100, 100)
+    with c3:
+        above_sma50 = st.selectbox("SMA50 filter", ["Any", "Above", "Below"])
+        above_sma200 = st.selectbox("SMA200 filter", ["Any", "Above", "Below"])
+    with c4:
+        min_rel_vol = st.number_input("Min relative volume", value=0.0, step=0.1)
+        sort_by = st.selectbox("Sort by", ["1D %", "5D %", "1M %", "RSI", "Rel Vol", "Price"])
+
+    preset = st.radio(
+        "Quick presets",
+        ["Custom", "Momentum (RSI 55–75, above SMA50)", "Oversold (RSI < 35)", "High volume (>1.5x)", "Leaders (1M > 5%)"],
+        horizontal=True,
+    )
+
+    raw = run_stock_screener(universe)
+    if raw is None or raw.empty:
+        st.warning("Screener data unavailable — try again in a minute.")
+    else:
+        df = raw.copy()
+        # Presets override some filters
+        if preset.startswith("Momentum"):
+            min_rsi, max_rsi = 55, 75
+            above_sma50 = "Above"
+        elif preset.startswith("Oversold"):
+            min_rsi, max_rsi = 0, 35
+        elif preset.startswith("High volume"):
+            min_rel_vol = 1.5
+        elif preset.startswith("Leaders"):
+            df = df[df["1M %"] > 5]
+
+        df = df[(df["1D %"] >= min_1d) & (df["1D %"] <= max_1d)]
+        df = df[(df["RSI"] >= min_rsi) & (df["RSI"] <= max_rsi)]
+        if above_sma50 == "Above":
+            df = df[df["Above SMA50"] == True]
+        elif above_sma50 == "Below":
+            df = df[df["Above SMA50"] == False]
+        if above_sma200 == "Above":
+            df = df[df["Above SMA200"] == True]
+        elif above_sma200 == "Below":
+            df = df[df["Above SMA200"] == False]
+        if min_rel_vol > 0:
+            df = df[df["Rel Vol"].fillna(0) >= min_rel_vol]
+
+        if sort_by in df.columns:
+            df = df.sort_values(sort_by, ascending=False)
+
+        st.metric("Matches", f"{len(df)} / {len(raw)}")
+        if df.empty:
+            st.info("No symbols match these filters — loosen the criteria.")
+        else:
+            show = df.copy()
+            show["Price"] = show["Price"].map(lambda x: f"${x:,.2f}")
+            for col in ["1D %", "5D %", "1M %", "vs SMA50 %", "vs SMA200 %"]:
+                if col in show.columns:
+                    show[col] = show[col].map(lambda x: f"{x:+.2f}%" if pd.notna(x) else "—")
+            show["RSI"] = show["RSI"].map(lambda x: f"{x:.0f}" if pd.notna(x) else "—")
+            show["Rel Vol"] = show["Rel Vol"].map(lambda x: f"{x:.2f}x" if pd.notna(x) else "—")
+            drop_cols = [c for c in ["Above SMA50", "Above SMA200"] if c in show.columns]
+            show = show.drop(columns=drop_cols)
+            st.dataframe(show, use_container_width=True, hide_index=True)
+
+            # Send matches to chart tickers
+            if st.button("Use top matches as chart tickers (max 6)"):
+                top = df["Symbol"].head(6).tolist()
+                # Prefer -USD style only for crypto; these are stocks
+                st.session_state.main_tickers_value = ", ".join(top)
+                st.session_state.url_tickers_applied = True
+                st.success("Updated tickers — open **Crypto** or **Compare** to chart them.")
+                st.rerun()
+
+
 if nav == "🛠️ Tools":
     st.subheader("🛠️ Backtesting • Multi-Timeframe • Export")
     
