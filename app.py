@@ -578,6 +578,101 @@ def load_live_board(symbols: Tuple[str, ...] = None) -> pd.DataFrame:
     df = df.sort_values("_ord").drop(columns=["_ord"])
     return df
 
+
+def get_economic_calendar(days_ahead: int = 45) -> pd.DataFrame:
+    """
+    Static high-impact US macro calendar (free, no API).
+    Dates are known scheduled releases; confirm near the day on official sites.
+    """
+    # (date, event, typical_impact, notes)
+    events = [
+        # 2026 remaining / sample rolling set — update yearly as needed
+        ("2026-10-29", "FOMC Rate Decision", "High", "Fed policy + press conference"),
+        ("2026-11-07", "US Employment (NFP)", "High", "Jobs + unemployment"),
+        ("2026-11-13", "US CPI (Inflation)", "High", "Consumer price index"),
+        ("2026-11-26", "US GDP (Advance)", "High", "Growth print"),
+        ("2026-12-10", "US CPI (Inflation)", "High", "Consumer price index"),
+        ("2026-12-17", "FOMC Rate Decision", "High", "Fed policy + press conference"),
+        ("2027-01-09", "US Employment (NFP)", "High", "Jobs + unemployment"),
+        ("2027-01-14", "US CPI (Inflation)", "High", "Consumer price index"),
+        ("2027-01-28", "FOMC Rate Decision", "High", "Fed policy + press conference"),
+        ("2027-02-12", "US CPI (Inflation)", "High", "Consumer price index"),
+        ("2027-03-06", "US Employment (NFP)", "High", "Jobs + unemployment"),
+        ("2027-03-11", "US CPI (Inflation)", "High", "Consumer price index"),
+        ("2027-03-18", "FOMC Rate Decision", "High", "Fed policy + press conference"),
+        ("2027-04-10", "US Employment (NFP)", "High", "Jobs + unemployment"),
+        ("2027-04-14", "US CPI (Inflation)", "High", "Consumer price index"),
+        ("2027-05-06", "FOMC Rate Decision", "High", "Fed policy + press conference"),
+        ("2027-05-13", "US CPI (Inflation)", "High", "Consumer price index"),
+        ("2027-06-05", "US Employment (NFP)", "High", "Jobs + unemployment"),
+        ("2027-06-17", "FOMC Rate Decision", "High", "Fed policy + press conference"),
+    ]
+    today = pd.Timestamp.utcnow().normalize()
+    rows = []
+    for d, name, impact, notes in events:
+        dt = pd.Timestamp(d, tz="UTC")
+        if dt < today - pd.Timedelta(days=1):
+            continue
+        if dt > today + pd.Timedelta(days=days_ahead):
+            continue
+        rows.append({
+            "Date": dt.strftime("%Y-%m-%d"),
+            "Event": name,
+            "Impact": impact,
+            "Notes": notes,
+            "Days": int((dt.normalize() - today).days),
+        })
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def load_sector_board() -> pd.DataFrame:
+    """Sector ETF snapshot — 1D and ~1W change via Yahoo."""
+    sectors = {
+        "XLK": "Tech",
+        "XLF": "Financials",
+        "XLE": "Energy",
+        "XLV": "Healthcare",
+        "XLI": "Industrials",
+        "XLY": "Consumer Disc.",
+        "XLP": "Consumer Staples",
+        "XLU": "Utilities",
+        "XLB": "Materials",
+        "XLRE": "Real Estate",
+        "SMH": "Semiconductors",
+        "XBI": "Biotech",
+    }
+
+    def _one(sym: str, name: str):
+        try:
+            h = yf.Ticker(sym).history(period="1mo", interval="1d", auto_adjust=True)
+            if h is None or h.empty or "Close" not in h.columns:
+                return None
+            px = float(h["Close"].iloc[-1])
+            prev = float(h["Close"].iloc[-2]) if len(h) > 1 else px
+            d1 = ((px / prev) - 1) * 100 if prev else 0.0
+            week_ago = float(h["Close"].iloc[-6]) if len(h) > 6 else prev
+            w1 = ((px / week_ago) - 1) * 100 if week_ago else 0.0
+            return {"Sector": name, "ETF": sym, "Price": px, "1D %": d1, "1W %": w1}
+        except Exception:
+            return None
+
+    rows = []
+    syms = list(sectors.items())
+    with ThreadPoolExecutor(max_workers=min(8, len(syms))) as ex:
+        futs = {ex.submit(_one, s, n): s for s, n in syms}
+        for fut in as_completed(futs):
+            try:
+                r = fut.result()
+                if r:
+                    rows.append(r)
+            except Exception:
+                pass
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows).sort_values("1D %", ascending=False)
+    return df
+
 def get_shared_market_data(tickers, interval, lookback, period, is_6h):
     """Fetch once per unique config; reuse across tabs in the same run via session_state."""
     key = ("mkt", tuple(tickers), interval, lookback, period, is_6h)
@@ -2294,6 +2389,41 @@ if nav == "☀️ Briefing":
                 st.caption("Live board temporarily unavailable.")
         except Exception:
             st.caption("Live board temporarily unavailable.")
+
+        # --- Economic calendar + sectors ---
+        cal_col, sec_col = st.columns(2)
+        with cal_col:
+            st.markdown("##### Economic calendar")
+            st.caption("High-impact US releases (scheduled dates — confirm on release day)")
+            try:
+                cal = get_economic_calendar(days_ahead=60)
+                if cal is not None and not cal.empty:
+                    show = cal.copy()
+                    show["When"] = show["Days"].map(lambda d: "Today" if d == 0 else ("Tomorrow" if d == 1 else f"in {d}d"))
+                    st.dataframe(
+                        show[["Date", "When", "Event", "Impact", "Notes"]],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                else:
+                    st.caption("No upcoming events in the next 60 days in the built-in list.")
+            except Exception:
+                st.caption("Calendar unavailable.")
+        with sec_col:
+            st.markdown("##### Sector board")
+            st.caption("US sector ETFs — sorted by 1-day change")
+            try:
+                sec = load_sector_board()
+                if sec is not None and not sec.empty:
+                    disp = sec.copy()
+                    disp["Price"] = disp["Price"].map(lambda x: f"${x:,.2f}")
+                    disp["1D %"] = disp["1D %"].map(lambda x: f"{x:+.2f}%")
+                    disp["1W %"] = disp["1W %"].map(lambda x: f"{x:+.2f}%")
+                    st.dataframe(disp, use_container_width=True, hide_index=True)
+                else:
+                    st.caption("Sector data unavailable.")
+            except Exception:
+                st.caption("Sector data unavailable.")
 
         st.markdown("---")
         left, right = st.columns(2)
