@@ -1150,22 +1150,36 @@ def get_fear_greed() -> Tuple[str, str]:
         return "N/A", "Unavailable"
 
 @st.cache_data(ttl=90, show_spinner="Fetching fresh crypto news...")
-def get_crypto_news(cache_buster: str, max_items: int = 12) -> List[Dict]:
-    feeds = {
-        "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
-        "CoinTelegraph": "https://cointelegraph.com/rss",
-        "Decrypt": "https://decrypt.co/feed",
-        "The Block": "https://www.theblock.co/rss.xml",
-        "CryptoSlate": "https://cryptoslate.com/feed/",
-    }
-    articles = []
-    for source, url in feeds.items():
+@st.cache_data(ttl=900, show_spinner="Fetching market news…")
+def get_market_news(cache_buster: str = "", max_items: int = 40) -> List[Dict]:
+    """
+    Free multi-source news: Fed, SEC, Stocks/Macro, Crypto.
+    cache_buster only exists to optionally bust Streamlit cache from the caller.
+    """
+    feeds = [
+        # Fed / policy
+        ("Fed", "Federal Reserve", "https://www.federalreserve.gov/feeds/press_all.xml"),
+        ("Fed", "Fed Speeches", "https://www.federalreserve.gov/feeds/speeches.xml"),
+        # SEC / regulation
+        ("SEC", "SEC Press", "https://www.sec.gov/news/pressreleases.rss"),
+        # Stocks / macro
+        ("Stocks", "Yahoo Finance", "https://finance.yahoo.com/news/rssindex"),
+        ("Stocks", "CNBC Top News", "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114"),
+        ("Stocks", "MarketWatch", "https://feeds.marketwatch.com/marketwatch/topstories/"),
+        # Crypto
+        ("Crypto", "CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
+        ("Crypto", "CoinTelegraph", "https://cointelegraph.com/rss"),
+        ("Crypto", "Decrypt", "https://decrypt.co/feed"),
+        ("Crypto", "The Block", "https://www.theblock.co/rss.xml"),
+    ]
+    articles: List[Dict] = []
+    for category, source, url in feeds:
         try:
-            resp = requests.get(url, headers=HEADERS, timeout=12)
+            resp = requests.get(url, headers=HEADERS, timeout=10)
             if resp.status_code != 200:
                 continue
             feed = feedparser.parse(io.BytesIO(resp.content))
-            for entry in feed.entries[:6]:
+            for entry in feed.entries[:5]:
                 published_struct = entry.get("published_parsed") or entry.get("updated_parsed")
                 if published_struct:
                     try:
@@ -1178,19 +1192,26 @@ def get_crypto_news(cache_buster: str, max_items: int = 12) -> List[Dict]:
                         pub_dt = pd.to_datetime(raw, utc=True)
                     except Exception:
                         pub_dt = pd.Timestamp.utcnow()
-                summary = entry.get("summary", "") or entry.get("description", "")
+                if pub_dt.tzinfo is None:
+                    pub_dt = pub_dt.tz_localize("UTC")
+                summary = entry.get("summary", "") or entry.get("description", "") or ""
                 if summary:
-                    summary = (
-                        summary.replace("<p>", "")
-                        .replace("</p>", "")
-                        .replace("<br>", " ")
-                        .replace("<br/>", " ")
-                    )
-                    summary = summary[:280] + ("..." if len(summary) > 280 else "")
+                    # strip simple HTML
+                    for tag in ("<p>", "</p>", "<br>", "<br/>", "<br />"):
+                        summary = summary.replace(tag, " ")
+                    while "<" in summary and ">" in summary:
+                        a, b = summary.find("<"), summary.find(">")
+                        if a == -1 or b == -1 or b < a:
+                            break
+                        summary = summary[:a] + " " + summary[b + 1 :]
+                    summary = " ".join(summary.split())[:240]
+                    if len(summary) == 240:
+                        summary += "..."
                 articles.append({
-                    "title": entry.get("title", "No title").strip(),
-                    "link": entry.get("link", "#"),
+                    "title": (entry.get("title") or "No title").strip(),
+                    "link": entry.get("link") or "#",
                     "source": source,
+                    "category": category,
                     "published": pub_dt.strftime("%Y-%m-%d %H:%M UTC"),
                     "published_dt": pub_dt,
                     "summary": summary,
@@ -1198,7 +1219,25 @@ def get_crypto_news(cache_buster: str, max_items: int = 12) -> List[Dict]:
         except Exception:
             continue
     articles = sorted(articles, key=lambda x: x["published_dt"], reverse=True)
-    return articles[:max_items]
+    # Light dedupe by title
+    seen = set()
+    out = []
+    for a in articles:
+        key = a["title"].lower()[:80]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(a)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def get_crypto_news(cache_buster: str, max_items: int = 12) -> List[Dict]:
+    """Backward-compatible wrapper — crypto slice of market news."""
+    all_news = get_market_news(cache_buster=cache_buster, max_items=60)
+    crypto = [a for a in all_news if a.get("category") == "Crypto"]
+    return crypto[:max_items] if crypto else all_news[:max_items]
 
 @st.cache_data(ttl=90)
 def get_real_onchain(ticker: str) -> Dict[str, Any]:
@@ -2217,14 +2256,27 @@ if nav == "☀️ Briefing":
             else:
                 st.caption("Futures metrics unavailable right now.")
 
-        st.markdown("##### Headlines")
+        st.markdown("##### Market-moving headlines")
+        st.caption("Fed · SEC · Stocks · Crypto — free RSS, refreshed ~15 min")
         try:
-            news = get_crypto_news(cache_buster=pd.Timestamp.now().strftime("%Y-%m-%d %H"))
-            if news:
-                for art in news[:5]:
-                    st.markdown(f"- **{art['source']}** — [{art['title']}]({art['link']})")
-            else:
+            news = get_market_news(cache_buster=pd.Timestamp.now().strftime("%Y-%m-%d %H"), max_items=36)
+            if not news:
                 st.caption("No headlines right now.")
+            else:
+                # Show a balanced mix by category
+                order = ["Fed", "SEC", "Stocks", "Crypto"]
+                cols = st.columns(4)
+                for i, cat in enumerate(order):
+                    with cols[i]:
+                        st.markdown(f"**{cat}**")
+                        items = [a for a in news if a.get("category") == cat][:4]
+                        if not items:
+                            st.caption("—")
+                        for art in items:
+                            title = (art.get("title") or "")[:90]
+                            link = art.get("link") or "#"
+                            src = art.get("source") or ""
+                            st.markdown(f"- [{title}]({link}) · *{src}*")
         except Exception:
             st.caption("News feed unavailable.")
 
