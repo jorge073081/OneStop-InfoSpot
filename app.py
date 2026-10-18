@@ -1555,7 +1555,7 @@ def build_asset_chart(
     if show_macd: subplot_titles.append("MACD")
     if show_stoch: subplot_titles.append("Stochastic")
     if show_atr: subplot_titles.append("ATR (14)")
-    if show_vol_profile: subplot_titles.append("Volume Profile")
+    if show_vol_profile: subplot_titles.append("Volume")
     if show_vs_btc and "vs_btc" in h_data.columns: subplot_titles.append("vs BTC (%)")
     fig = make_subplots(
         rows=rows, cols=1, shared_xaxes=True,
@@ -1663,15 +1663,39 @@ def build_asset_chart(
                                  line=dict(color="#FF8C00", width=1.8)), row=current_row, col=1)
     if show_vol_profile and "volume" in h_data.columns:
         current_row += 1
+        # Classic volume-by-bar (works with equal-width x-axis). Horizontal "volume profile"
+        # was broken under shared_xaxes and is intentionally replaced.
         try:
-            price_bins = pd.cut(h_data["close"], bins=24)
-            vol_profile = h_data.groupby(price_bins, observed=True)["volume"].sum()
-            bin_centers = [interval.mid for interval in vol_profile.index]
-            fig.add_trace(go.Bar(x=vol_profile.values, y=bin_centers, orientation="h",
-                                 name="Vol Profile", marker_color="rgba(0, 191, 255, 0.45)", showlegend=False),
-                          row=current_row, col=1)
+            vol_colors = [
+                "rgba(0,255,127,0.55)" if c >= o else "rgba(255,69,0,0.55)"
+                for o, c in zip(
+                    h_data["open"] if "open" in h_data.columns else h_data["close"],
+                    h_data["close"],
+                )
+            ]
+            fig.add_trace(
+                go.Bar(
+                    x=x_pos,
+                    y=h_data["volume"],
+                    name="Volume",
+                    marker_color=vol_colors,
+                    showlegend=False,
+                ),
+                row=current_row,
+                col=1,
+            )
         except Exception:
-            pass
+            fig.add_trace(
+                go.Bar(
+                    x=x_pos,
+                    y=h_data["volume"],
+                    name="Volume",
+                    marker_color="rgba(0, 191, 255, 0.5)",
+                    showlegend=False,
+                ),
+                row=current_row,
+                col=1,
+            )
     if show_vs_btc and "vs_btc" in h_data.columns:
         current_row += 1
         fig.add_trace(go.Scatter(x=x_pos, y=h_data["vs_btc"], name="vs BTC %",
