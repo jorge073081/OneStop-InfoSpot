@@ -1482,6 +1482,58 @@ def generate_prediction(
         "recent_volatility_pct": round(recent_vol, 2),
     }
 
+
+def build_volume_by_price_chart(h_data: pd.DataFrame, bins: int = 28) -> Optional[go.Figure]:
+    """Proper volume-at-price profile: price on Y, volume on X (standalone, not shared axis)."""
+    if h_data is None or h_data.empty:
+        return None
+    if "close" not in h_data.columns or "volume" not in h_data.columns:
+        return None
+    df = h_data.dropna(subset=["close", "volume"]).copy()
+    if len(df) < 5:
+        return None
+    try:
+        price_bins = pd.cut(df["close"], bins=min(bins, max(8, len(df) // 3)))
+        grouped = df.groupby(price_bins, observed=True)["volume"].sum()
+        if grouped.empty:
+            return None
+        mids = [interval.mid for interval in grouped.index]
+        vols = grouped.values.astype(float)
+        # Color by whether bin is above/below last price
+        last_px = float(df["close"].iloc[-1])
+        colors = ["rgba(0,255,127,0.75)" if m >= last_px else "rgba(255,69,0,0.75)" for m in mids]
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=vols,
+            y=mids,
+            orientation="h",
+            marker_color=colors,
+            name="Volume",
+            hovertemplate="Price ~ %{y:.4g}<br>Volume %{x:,.0f}<extra></extra>",
+        ))
+        # Mark last price
+        fig.add_hline(
+            y=last_px, line_dash="dot", line_color="#00FFFF", line_width=1,
+            annotation_text=f"Last {last_px:,.4g}", annotation_position="top right",
+        )
+        fig.update_layout(
+            title="Volume by Price (profile)",
+            height=320,
+            template="plotly_dark",
+            paper_bgcolor="#0e1117",
+            plot_bgcolor="#0e1117",
+            margin=dict(l=10, r=20, t=40, b=10),
+            font=dict(family="Outfit, sans-serif"),
+            xaxis_title="Volume",
+            yaxis_title="Price",
+            showlegend=False,
+            bargap=0.15,
+        )
+        return fig
+    except Exception:
+        return None
+
+
 # ============================================================
 # 5. CHART BUILDING ENGINE
 # ============================================================
@@ -2218,11 +2270,21 @@ if nav == "⚡ Crypto":
                 )
                 if show_long_baseline and "long_baseline" in h_data.columns:
                     fig.add_trace(
-                        go.Scatter(x=h_data.index, y=h_data["long_baseline"], name="1Y Baseline",
-                                   line=dict(color="#FF8C00", width=1.8, dash="dashdot")),
+                        go.Scatter(
+                            x=list(range(len(h_data))),
+                            y=h_data["long_baseline"],
+                            name="1Y Baseline",
+                            line=dict(color="#FF8C00", width=1.8, dash="dashdot"),
+                        ),
                         row=1, col=1,
                     )
                 st.plotly_chart(fig, use_container_width=True)
+
+                # Volume-by-price profile (price on Y axis) — separate chart so axes stay correct
+                if show_vol_profile:
+                    vp_fig = build_volume_by_price_chart(h_data)
+                    if vp_fig is not None:
+                        st.plotly_chart(vp_fig, use_container_width=True)
                 
                 # --- PATTERN SUMMARY BOX ---
                 if show_patterns:
