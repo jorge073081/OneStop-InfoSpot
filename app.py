@@ -674,27 +674,58 @@ def load_sector_board() -> pd.DataFrame:
     return df
 
 
-# Popular liquid universe for free screening (Yahoo symbols)
-SCREENER_UNIVERSE = [
-    # Indices / ETFs
+
+
+# ============================================================
+# STOCK SCREENER — top liquid stocks + crypto ETFs (timeout-safe)
+# ============================================================
+# Keep this list modest so Yahoo + Streamlit Cloud stay responsive.
+TOP_STOCKS = [
+    # ETFs / beta
     "SPY", "QQQ", "IWM", "DIA", "SMH", "XLF", "XLE", "XLK", "XLV", "ARKK",
-    # Mega / large cap
-    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "BRK-B", "JPM", "V",
-    "UNH", "XOM", "JNJ", "WMT", "MA", "PG", "HD", "CVX", "ABBV", "MRK",
-    "KO", "PEP", "AVGO", "COST", "LLY", "AMD", "NFLX", "CRM", "ORCL", "ADBE",
-    "INTC", "QCOM", "TXN", "IBM", "BA", "CAT", "GE", "DIS", "NKE", "SBUX",
-    "PYPL", "SQ", "SHOP", "UBER", "ABNB", "COIN", "HOOD", "PLTR", "SNOW", "PANW",
-    "NOW", "INTU", "AMAT", "LRCX", "MU", "ARM", "TSM", "BABA", "NIO", "RIVN",
-    "F", "GM", "T", "VZ", "CMCSA", "PFE", "MRNA", "BMY", "GILD", "AMGN",
+    # Mag7 + mega
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "BRK-B", "AVGO", "LLY",
+    # Large liquid names
+    "JPM", "V", "MA", "UNH", "XOM", "JNJ", "WMT", "PG", "HD", "COST",
+    "ORCL", "CRM", "AMD", "NFLX", "ADBE", "PEP", "KO", "MRK", "ABBV", "CVX",
+    "BAC", "WFC", "GS", "IBM", "CAT", "BA", "GE", "DIS", "MCD", "NKE",
+    "INTC", "QCOM", "TXN", "AMAT", "MU", "ARM", "TSM", "NOW", "INTU", "PANW",
+    "UBER", "PLTR", "COIN", "HOOD", "SHOP", "SNOW", "CRWD", "NET",
 ]
 
-@st.cache_data(ttl=180, show_spinner="Running screener…")
+CRYPTO_ETFS = [
+    "IBIT", "FBTC", "ARKB", "BITB", "BITO", "HODL", "BTCO", "EZBC",
+    "ETHA", "ETHE", "ETHW", "EZET",
+    "BITQ", "BKCH", "DAPP", "BLOK", "WGMI",
+]
+
+def build_screener_universe(mode: str) -> List[str]:
+    """Small, liquid universes only — avoids Yahoo timeouts."""
+    mode = (mode or "").lower()
+    stocks = list(TOP_STOCKS)
+    crypto = list(CRYPTO_ETFS)
+    if "crypto" in mode and "stock" not in mode and "combined" not in mode:
+        base = crypto
+    elif "stock" in mode and "crypto" not in mode:
+        base = stocks
+    else:
+        base = stocks + crypto
+    seen = set()
+    out = []
+    for s in base:
+        s = str(s).strip().upper()
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
+
+
+@st.cache_data(ttl=300, show_spinner="Screening top names…")
 def run_stock_screener(symbols: Tuple[str, ...]) -> pd.DataFrame:
-    """Fetch daily metrics for a symbol list and return a screenable table."""
+    """Fetch daily metrics for a compact liquid list (parallel, capped)."""
     def _one(sym: str):
         try:
-            t = yf.Ticker(sym)
-            h = t.history(period="6mo", interval="1d", auto_adjust=True)
+            h = yf.Ticker(sym).history(period="6mo", interval="1d", auto_adjust=True)
             if h is None or len(h) < 30 or "Close" not in h.columns:
                 return None
             close = h["Close"]
@@ -704,12 +735,11 @@ def run_stock_screener(symbols: Tuple[str, ...]) -> pd.DataFrame:
             d1 = (px / prev - 1) * 100
             d5 = (px / float(close.iloc[-6]) - 1) * 100 if len(close) > 6 else np.nan
             d21 = (px / float(close.iloc[-22]) - 1) * 100 if len(close) > 22 else np.nan
-            # RSI 14
             delta = close.diff()
             gain = delta.where(delta > 0, 0.0)
             loss = -delta.where(delta < 0, 0.0)
-            avg_g = gain.ewm(alpha=1/14, min_periods=14).mean()
-            avg_l = loss.ewm(alpha=1/14, min_periods=14).mean()
+            avg_g = gain.ewm(alpha=1 / 14, min_periods=14).mean()
+            avg_l = loss.ewm(alpha=1 / 14, min_periods=14).mean()
             rs = avg_g / avg_l.replace(0, np.nan)
             rsi = float((100 - (100 / (1 + rs))).iloc[-1])
             sma50 = float(close.tail(50).mean()) if len(close) >= 50 else float(close.mean())
@@ -717,8 +747,10 @@ def run_stock_screener(symbols: Tuple[str, ...]) -> pd.DataFrame:
             avg_vol = float(vol.tail(20).mean()) if vol is not None and len(vol) >= 5 else np.nan
             last_vol = float(vol.iloc[-1]) if vol is not None else np.nan
             rel_vol = (last_vol / avg_vol) if avg_vol and avg_vol > 0 else np.nan
+            kind = "Crypto ETF" if sym in set(CRYPTO_ETFS) else "Stock/ETF"
             return {
                 "Symbol": sym,
+                "Type": kind,
                 "Price": px,
                 "1D %": d1,
                 "5D %": d5,
@@ -734,8 +766,9 @@ def run_stock_screener(symbols: Tuple[str, ...]) -> pd.DataFrame:
             return None
 
     rows = []
-    with ThreadPoolExecutor(max_workers=10) as ex:
-        futs = {ex.submit(_one, s): s for s in symbols}
+    sym_list = list(symbols)[:120]  # hard cap — timeout safety
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futs = {ex.submit(_one, s): s for s in sym_list}
         for fut in as_completed(futs):
             try:
                 r = fut.result()
@@ -3330,13 +3363,25 @@ if nav == "📊 Analysis":
 # ============================================================
 
 if nav == "🔎 Screener":
-    st.subheader("🔎 Stock Screener")
-    st.caption("Free Yahoo-based screen of a liquid US stock/ETF universe. Not investable advice — data can lag.")
+    st.subheader("🔎 Top Performers Screener")
+    st.caption(
+        "Liquid stocks + crypto ETFs only (timeout-safe). Sorted toward leaders — not the full market."
+    )
 
-    universe = tuple(SCREENER_UNIVERSE)
-    with st.expander("Universe", expanded=False):
-        st.write(", ".join(universe))
-        st.caption(f"{len(universe)} symbols")
+    uni_mode = st.selectbox(
+        "Universe",
+        [
+            "Combined (Top stocks + Crypto ETFs)",
+            "Top stocks / ETFs",
+            "Crypto ETFs",
+        ],
+        index=0,
+    )
+    universe_list = build_screener_universe(uni_mode)
+    universe = tuple(universe_list)
+    with st.expander("Universe symbols", expanded=False):
+        st.write(", ".join(universe_list))
+        st.caption(f"{len(universe_list)} symbols · max 120 screened · 5 min cache")
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -3350,7 +3395,7 @@ if nav == "🔎 Screener":
         above_sma200 = st.selectbox("SMA200 filter", ["Any", "Above", "Below"])
     with c4:
         min_rel_vol = st.number_input("Min relative volume", value=0.0, step=0.1)
-        sort_by = st.selectbox("Sort by", ["1D %", "5D %", "1M %", "RSI", "Rel Vol", "Price"])
+        sort_by = st.selectbox("Sort by", ["1D %", "5D %", "1M %", "RSI", "Rel Vol", "Price"], index=0)
 
     preset = st.radio(
         "Quick presets",
@@ -3391,6 +3436,19 @@ if nav == "🔎 Screener":
             df = df.sort_values(sort_by, ascending=False)
 
         st.metric("Matches", f"{len(df)} / {len(raw)}")
+        # Top performers strip
+        if not df.empty and "1D %" in df.columns:
+            leaders = df.nlargest(min(5, len(df)), "1D %")
+            laggards = df.nsmallest(min(5, len(df)), "1D %")
+            t1, t2 = st.columns(2)
+            with t1:
+                st.markdown("**Today’s leaders (1D)**")
+                for _, r in leaders.iterrows():
+                    st.markdown(f"- **{r['Symbol']}** {r['1D %']:+.2f}%")
+            with t2:
+                st.markdown("**Today’s laggards (1D)**")
+                for _, r in laggards.iterrows():
+                    st.markdown(f"- **{r['Symbol']}** {r['1D %']:+.2f}%")
         if df.empty:
             st.info("No symbols match these filters — loosen the criteria.")
         else:
