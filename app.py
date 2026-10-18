@@ -28,180 +28,201 @@ st.set_page_config(
 
 st.markdown(
     """
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
-        /* ===== GEOMETRIC SANS-SERIF EVERYWHERE ===== */
-        html, body, .stApp, p, label, .stMarkdown p, .stCaption, 
+        :root {
+            --bg: #0b0e11;
+            --surface: #12161c;
+            --surface-2: #1a2030;
+            --border: #2a3344;
+            --text: #e8edf5;
+            --muted: #8b97a8;
+            --accent: #3b82f6;
+            --bull: #22c55e;
+            --bear: #ef4444;
+        }
+
+        html, body, .stApp,
+        p, label, .stMarkdown, .stMarkdown p, .stCaption,
         h1, h2, h3, h4, h5, h6,
         .stTextInput input, .stSelectbox div, .stSlider div, .stCheckbox label,
         [data-testid="stMetricValue"], [data-testid="stMetricLabel"],
         .stDataFrame, table, th, td,
         button, .stButton button, .stDownloadButton button,
         .stRadio label, .stTabs [data-baseweb="tab"] {
-            font-family: 'Outfit', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+            font-family: 'IBM Plex Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
         }
 
-        .stApp { background-color: #0e1117; color: #fafafa; }
-        section[data-testid="stSidebar"] { background-color: #1a1d24; }
-        h1, h2, h3, h4, h5, h6, p, label, .stMarkdown { color: #fafafa !important; }
-        [data-testid="stMetricValue"] { color: #00FF7F !important; }
+        .stApp { background-color: var(--bg) !important; color: var(--text) !important; }
+        section[data-testid="stSidebar"] {
+            background-color: var(--surface) !important;
+            border-right: 1px solid var(--border);
+        }
+        h1, h2, h3, h4, h5, h6, p, label, .stMarkdown { color: var(--text) !important; }
+        .stCaption, [data-testid="stCaption"] { color: var(--muted) !important; }
 
         .block-container {
-            padding-top: 1rem !important;
-            padding-left: 1rem !important;
-            padding-right: 1rem !important;
-            max-width: 1400px;
+            padding-top: 1.1rem !important;
+            padding-bottom: 2rem !important;
+            padding-left: 1.4rem !important;
+            padding-right: 1.4rem !important;
+            max-width: 1440px;
         }
 
-        /* Title */
         .silver-title {
-            font-family: 'Outfit', sans-serif !important;
-            font-size: 2.8rem;
-            font-weight: 700;
-            text-align: center;
-            margin: -0.4rem 0 0.1rem 0;
-            letter-spacing: 1px;
-            background: linear-gradient(to bottom, #ffffff 0%, #c0c0c0 50%, #d0d0d0 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            filter: drop-shadow(0 0 6px rgba(192, 192, 192, 0.6));
+            font-family: 'IBM Plex Sans', sans-serif !important;
+            font-size: 1.75rem !important;
+            font-weight: 600 !important;
+            text-align: left;
+            margin: 0 0 0.15rem 0 !important;
+            letter-spacing: -0.02em;
+            color: var(--text) !important;
+            background: none !important;
+            -webkit-text-fill-color: unset !important;
         }
         .silver-subtitle {
-            font-family: 'Outfit', sans-serif !important;
-            font-size: 1.35rem;
-            font-weight: 500;
-            text-align: center;
-            margin: 0 0 0.7rem 0;
-            letter-spacing: 0.5px;
-            background: linear-gradient(to bottom, #ffffff 0%, #c0c0c0 50%, #d0d0d0 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            font-family: 'IBM Plex Sans', sans-serif !important;
+            font-size: 0.85rem !important;
+            font-weight: 400 !important;
+            text-align: left;
+            color: var(--muted) !important;
+            margin: 0 0 0.75rem 0 !important;
+            letter-spacing: 0.02em;
         }
 
-        /* News cards */
-        .news-box {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            padding: 10px 0;
-            width: 100%;
+        [data-testid="stMetric"] {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.65rem 0.85rem !important;
         }
-        .news-meta { font-size: 0.85rem; color: #a0a0a0; margin: 0; }
-        .news-summary { font-size: 0.98rem; color: #fafafa; line-height: 1.55; margin: 0; }
-        .news-action-link {
-            align-self: flex-start;
-            background-color: #1f242d;
-            color: #00FFFF !important;
-            padding: 8px 14px;
-            border-radius: 6px;
-            text-decoration: none !important;
-            font-size: 0.9rem;
-            font-weight: 600;
-            border: 1px solid #3b4252;
+        [data-testid="stMetricValue"] {
+            color: var(--text) !important;
+            font-family: 'IBM Plex Mono', monospace !important;
+            font-size: 1.25rem !important;
+            font-weight: 600 !important;
         }
-        .news-action-link:hover {
-            background-color: #00FF7F;
-            color: #0e1117 !important;
-            border-color: #00FF7F;
+        [data-testid="stMetricLabel"] {
+            color: var(--muted) !important;
+            font-size: 0.72rem !important;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            font-weight: 500 !important;
+        }
+        [data-testid="stMetricDelta"] {
+            font-family: 'IBM Plex Mono', monospace !important;
+            font-size: 0.8rem !important;
         }
 
-        /* Buttons – larger tap targets */
+        .stTextInput input, .stSelectbox > div > div, .stNumberInput input {
+            background-color: var(--surface-2) !important;
+            border: 1px solid var(--border) !important;
+            border-radius: 6px !important;
+            color: var(--text) !important;
+        }
+        .stTextInput input:focus {
+            border-color: var(--accent) !important;
+            box-shadow: 0 0 0 1px var(--accent) !important;
+        }
+
         .stButton > button, .stDownloadButton > button {
+            background: var(--surface-2) !important;
+            color: var(--text) !important;
+            border: 1px solid var(--border) !important;
+            border-radius: 6px !important;
+            font-weight: 500 !important;
+        }
+        .stButton > button:hover, .stDownloadButton > button:hover {
+            border-color: var(--accent) !important;
+            background: #1e293b !important;
+        }
+
+        div[role="radiogroup"] {
+            gap: 0.25rem !important;
+            flex-wrap: wrap !important;
+            padding: 0.25rem !important;
+            background: var(--surface) !important;
+            border: 1px solid var(--border) !important;
             border-radius: 8px !important;
-            min-height: 2.6rem;
+            margin-bottom: 0.75rem !important;
+        }
+        div[role="radiogroup"] label {
+            background: transparent !important;
+            border-radius: 6px !important;
+            padding: 0.35rem 0.65rem !important;
+            color: var(--muted) !important;
+            font-size: 0.82rem !important;
+            font-weight: 500 !important;
+        }
+        div[role="radiogroup"] label:hover {
+            color: var(--text) !important;
+            background: var(--surface-2) !important;
+        }
+
+        [data-testid="stDataFrame"] {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .stDataFrame, table, th, td { font-size: 0.85rem !important; }
+
+        .streamlit-expanderHeader {
+            font-weight: 500 !important;
+            color: var(--text) !important;
+            background: var(--surface) !important;
+            border-radius: 6px !important;
+        }
+        section[data-testid="stSidebar"] h1,
+        section[data-testid="stSidebar"] h2,
+        section[data-testid="stSidebar"] h3 {
+            font-size: 0.8rem !important;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted) !important;
             font-weight: 600 !important;
         }
 
-        /* Tables scroll on small screens */
-        [data-testid="stDataFrame"] {
-            overflow-x: auto;
-        }
-
-        /* ===== MOBILE RESPONSIVE ===== */
-        /* Horizontal scroll for tab bar */
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 0.25rem;
-            overflow-x: auto;
-            flex-wrap: nowrap !important;
-            scrollbar-width: thin;
-        }
-        .stTabs [data-baseweb="tab"] {
-            white-space: nowrap;
+        hr { border-color: var(--border) !important; opacity: 0.7; }
+        [data-testid="stAlert"] {
+            border-radius: 8px !important;
+            border: 1px solid var(--border) !important;
         }
 
         @media (max-width: 768px) {
-            .silver-title {
-                font-size: 1.7rem !important;
-                letter-spacing: 0.3px;
-                margin-top: 0.2rem !important;
-            }
-            .silver-subtitle {
-                font-size: 0.95rem !important;
-                margin-bottom: 0.4rem !important;
-            }
+            .silver-title { font-size: 1.35rem !important; }
+            .silver-subtitle { font-size: 0.78rem !important; }
             .block-container {
-                padding-top: 0.5rem !important;
-                padding-left: 0.55rem !important;
-                padding-right: 0.55rem !important;
-                padding-bottom: 4rem !important;
+                padding-top: 0.6rem !important;
+                padding-left: 0.65rem !important;
+                padding-right: 0.65rem !important;
+                padding-bottom: 3.5rem !important;
             }
-            /* Metrics denser on phones */
             [data-testid="stMetricValue"] { font-size: 1.05rem !important; }
-            [data-testid="stMetricLabel"] { font-size: 0.7rem !important; }
-            [data-testid="metric-container"] {
-                padding: 0.35rem 0.4rem !important;
-            }
-            /* Tabs: smaller, scrollable */
-            .stTabs [data-baseweb="tab"] {
-                font-size: 0.78rem !important;
-                padding: 0.45rem 0.55rem !important;
-            }
-            /* Full-width buttons */
+            [data-testid="stMetricLabel"] { font-size: 0.65rem !important; }
             .stButton > button, .stDownloadButton > button {
                 width: 100%;
-                min-height: 2.75rem;
+                min-height: 2.6rem;
             }
-            /* Dataframes: allow sideways scroll */
-            [data-testid="stDataFrame"],
-            [data-testid="stTable"] {
+            [data-testid="stDataFrame"], [data-testid="stTable"] {
                 max-width: 100%;
                 overflow-x: auto !important;
             }
-            /* Plotly charts: slightly shorter on mobile */
-            .js-plotly-plot, .plotly {
-                max-width: 100% !important;
-            }
-            /* Sidebar tighter */
-            section[data-testid="stSidebar"] .block-container {
-                padding-top: 1rem !important;
-            }
-            /* Expanders easier to tap */
-            .streamlit-expanderHeader {
-                font-size: 0.95rem !important;
-                min-height: 2.5rem;
-            }
-            /* Reduce huge top gaps */
-            h2, h3 {
-                font-size: 1.15rem !important;
-                margin-top: 0.4rem !important;
+            h2, h3 { font-size: 1.05rem !important; margin-top: 0.35rem !important; }
+            div[role="radiogroup"] label {
+                font-size: 0.72rem !important;
+                padding: 0.3rem 0.45rem !important;
             }
         }
 
         @media (max-width: 480px) {
-            .silver-title { font-size: 1.4rem !important; }
-            .silver-subtitle { font-size: 0.85rem !important; }
-            .stTabs [data-baseweb="tab"] {
-                font-size: 0.72rem !important;
-                padding: 0.4rem 0.45rem !important;
-            }
+            .silver-title { font-size: 1.2rem !important; }
             [data-testid="stMetricValue"] { font-size: 0.95rem !important; }
         }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -2053,7 +2074,7 @@ def build_volume_by_price_chart(h_data: pd.DataFrame, bins: int = 28) -> Optiona
             paper_bgcolor="#0e1117",
             plot_bgcolor="#0e1117",
             margin=dict(l=10, r=20, t=40, b=10),
-            font=dict(family="Outfit, sans-serif"),
+            font=dict(family="IBM Plex Sans, sans-serif"),
             xaxis_title="Volume",
             yaxis_title="Price",
             showlegend=False,
@@ -2291,7 +2312,7 @@ def build_asset_chart(
         margin=dict(l=10, r=12, t=40, b=10),
         legend=dict(orientation="h", y=1.02),
         xaxis_rangeslider_visible=False,
-        font=dict(family="Outfit, sans-serif"),
+        font=dict(family="IBM Plex Sans, sans-serif"),
         # Drawing tools (trend lines, zones, freehand) — used with Plotly modebar
         dragmode="zoom",
         newshape=dict(
@@ -2458,9 +2479,9 @@ active_users = get_active_user_count(timeout_seconds=90)
 col_title, col_users = st.columns([4, 1.2])
 with col_title:
     st.markdown('<div class="silver-title">OneStop-InfoSpot</div>', unsafe_allow_html=True)
-    st.markdown('<div class="silver-subtitle">Asset Intelligence Terminal</div>', unsafe_allow_html=True)
+    st.markdown('<div class="silver-subtitle">Market intelligence desk · stocks · crypto · macro</div>', unsafe_allow_html=True)
 with col_users:
-    st.metric("🟢 Users", active_users)
+    st.metric("Active", active_users)
 
 st.caption("Dark mode • Candlesticks • Pattern Recognition • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro • 15Y Historical • Predictive Analytics")
 
@@ -2817,7 +2838,7 @@ if nav == "🔀 Compare":
                     paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
                     margin=dict(l=10, r=10, t=20, b=10),
                     legend=dict(orientation="h", y=1.1),
-                    font=dict(family="Outfit, sans-serif"),
+                    font=dict(family="IBM Plex Sans, sans-serif"),
                     yaxis_title="% from start of window",
                 )
                 st.plotly_chart(fig, use_container_width=True)
@@ -2849,7 +2870,7 @@ if nav == "🔀 Compare":
                         height=320, template="plotly_dark",
                         paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
                         margin=dict(l=10, r=10, t=10, b=10),
-                        font=dict(family="Outfit, sans-serif"),
+                        font=dict(family="IBM Plex Sans, sans-serif"),
                     )
                     st.plotly_chart(fig_c, use_container_width=True)
                 else:
@@ -2935,7 +2956,7 @@ if nav == "⚡ Crypto":
                 fig.update_layout(height=320, template="plotly_dark",
                                   paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
                                   margin=dict(l=10, r=10, t=30, b=10),
-                                  font=dict(family="Outfit, sans-serif"))
+                                  font=dict(family="IBM Plex Sans, sans-serif"))
                 st.plotly_chart(fig, use_container_width=True)
             
             st.subheader("🔥 Asset Analysis Frameworks")
@@ -3063,7 +3084,7 @@ if nav == "⚡ Crypto":
                                            marker=dict(color=levels, colorscale="Portland")))
                 fig_map.update_layout(height=340, template="plotly_dark",
                                       paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
-                                      font=dict(family="Outfit, sans-serif"))
+                                      font=dict(family="IBM Plex Sans, sans-serif"))
                 st.plotly_chart(fig_map, use_container_width=True)
             st.subheader("📊 Real-Time Futures Metrics")
             st.caption("Long/Short Account Ratio • Open Interest • Funding Rate  —  Source: OKX")
@@ -3081,7 +3102,7 @@ if nav == "⚡ Crypto":
                                        text=[f"{liquidity_profiles[k]['shorts']:.1f}%" for k in c_as], textposition="auto"))
                 fig_c.update_layout(height=320, barmode="group", template="plotly_dark",
                                     paper_bgcolor="#0e1117", plot_bgcolor="#0e1117", yaxis_title="%",
-                                    font=dict(family="Outfit, sans-serif"))
+                                    font=dict(family="IBM Plex Sans, sans-serif"))
                 st.plotly_chart(fig_c, use_container_width=True)
             if show_onchain and onchain_profiles:
                 st.subheader("🔗 Real On-chain Metrics")
@@ -3172,7 +3193,7 @@ if nav == "🌐 Macro":
                         height=280, template="plotly_dark",
                         paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
                         margin=dict(l=10, r=10, t=20, b=10),
-                        font=dict(family="Outfit, sans-serif"),
+                        font=dict(family="IBM Plex Sans, sans-serif"),
                         yaxis_title="Spread (pts)"
                     )
                     st.plotly_chart(fig_sp, use_container_width=True)
@@ -3195,7 +3216,7 @@ if nav == "🌐 Macro":
                 paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
                 margin=dict(l=10, r=10, t=20, b=10),
                 legend=dict(orientation="h", y=1.12),
-                font=dict(family="Outfit, sans-serif")
+                font=dict(family="IBM Plex Sans, sans-serif")
             )
             st.plotly_chart(fig_macro, use_container_width=True)
 
@@ -3257,7 +3278,7 @@ if nav == "🌐 Macro":
                             paper_bgcolor="#0e1117",
                             plot_bgcolor="#0e1117",
                             margin=dict(l=10, r=10, t=40, b=10),
-                            font=dict(family="Outfit, sans-serif"),
+                            font=dict(family="IBM Plex Sans, sans-serif"),
                             showlegend=False,
                         )
                         st.plotly_chart(fig_f, use_container_width=True)
@@ -3414,7 +3435,7 @@ if nav == "🔮 Predictive":
                     plot_bgcolor="#0e1117",
                     yaxis_title="Score (-100 to +100)",
                     yaxis=dict(range=[-100, 100]),
-                    font=dict(family="Outfit, sans-serif"),
+                    font=dict(family="IBM Plex Sans, sans-serif"),
                     margin=dict(l=10, r=10, t=30, b=10),
                 )
                 fig_score.add_hline(y=0, line_dash="dash", line_color="gray")
@@ -3485,7 +3506,7 @@ if nav == "📊 Analysis":
                         template="plotly_dark",
                         paper_bgcolor="#0e1117",
                         plot_bgcolor="#0e1117",
-                        font=dict(family="Outfit, sans-serif"),
+                        font=dict(family="IBM Plex Sans, sans-serif"),
                         margin=dict(l=10, r=10, t=40, b=10),
                         yaxis_title="Volatility %"
                     )
@@ -3519,7 +3540,7 @@ if nav == "📊 Analysis":
                         template="plotly_dark",
                         paper_bgcolor="#0e1117",
                         plot_bgcolor="#0e1117",
-                        font=dict(family="Outfit, sans-serif"),
+                        font=dict(family="IBM Plex Sans, sans-serif"),
                         margin=dict(l=10, r=10, t=20, b=10),
                     )
                     st.plotly_chart(fig_corr, use_container_width=True)
@@ -3701,7 +3722,7 @@ if nav == "🛠️ Tools":
                         template="plotly_dark",
                         paper_bgcolor="#0e1117",
                         plot_bgcolor="#0e1117",
-                        font=dict(family="Outfit, sans-serif"),
+                        font=dict(family="IBM Plex Sans, sans-serif"),
                         margin=dict(l=10, r=10, t=40, b=10),
                         yaxis_title="Growth of $1"
                     )
