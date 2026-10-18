@@ -640,186 +640,317 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         df["atr"] = compute_atr(df)
     return df
 
+
 # ============================================================
-# 3b. CHART PATTERN RECOGNITION ENGINE
+# 3b. CHART PATTERN RECOGNITION ENGINE (upgraded)
 # ============================================================
+def _trend_slope(closes: np.ndarray, look: int = 8) -> float:
+    """Simple % slope over last `look` bars. Positive = uptrend context."""
+    if len(closes) < look + 1:
+        return 0.0
+    a, b = float(closes[-look - 1]), float(closes[-1])
+    if a == 0:
+        return 0.0
+    return (b - a) / a
+
+
 def detect_candlestick_patterns(df: pd.DataFrame) -> List[Dict]:
-    """Detect common candlestick patterns. Returns list of dicts with pattern info."""
-    patterns = []
-    if df is None or len(df) < 5 or not all(c in df.columns for c in ["open", "high", "low", "close"]):
+    """
+    Detect candlestick patterns with trend context and stricter geometry.
+    Confidence: High / Medium / Low based on quality + context fit.
+    """
+    patterns: List[Dict] = []
+    need = ["open", "high", "low", "close"]
+    if df is None or len(df) < 8 or not all(c in df.columns for c in need):
         return patterns
-    
-    df = df.copy()
-    body = (df["close"] - df["open"]).abs()
-    range_ = df["high"] - df["low"]
-    upper_wick = df["high"] - df[["open", "close"]].max(axis=1)
-    lower_wick = df[["open", "close"]].min(axis=1) - df["low"]
-    
-    # Avoid division by zero
-    range_ = range_.replace(0, np.nan)
-    
-    for i in range(2, len(df)):
-        idx = df.index[i]
-        o, h, l, c = df["open"].iloc[i], df["high"].iloc[i], df["low"].iloc[i], df["close"].iloc[i]
-        prev_o, prev_c = df["open"].iloc[i-1], df["close"].iloc[i-1]
-        body_i = body.iloc[i]
-        range_i = range_.iloc[i]
-        
-        if pd.isna(range_i) or range_i == 0:
+
+    o = df["open"].values.astype(float)
+    h = df["high"].values.astype(float)
+    l = df["low"].values.astype(float)
+    c = df["close"].values.astype(float)
+    idx = df.index
+    n = len(df)
+
+    body = np.abs(c - o)
+    full = h - l
+    full_safe = np.where(full < 1e-12, np.nan, full)
+    upper = h - np.maximum(o, c)
+    lower = np.minimum(o, c) - l
+    avg_body = pd.Series(body).rolling(14, min_periods=3).mean().values
+
+    def add(i, typ, direction, conf, desc, price=None):
+        patterns.append({
+            "type": typ,
+            "direction": direction,
+            "index": idx[i],
+            "price": float(price if price is not None else c[i]),
+            "confidence": conf,
+            "description": desc,
+        })
+
+    # Only scan a recent window for responsiveness / less noise
+    start_i = max(3, n - 80)
+
+    for i in range(start_i, n):
+        if np.isnan(full_safe[i]) or full[i] <= 0:
             continue
-            
-        # Doji
-        if body_i / range_i < 0.1:
-            patterns.append({
-                "type": "Doji",
-                "direction": "Neutral",
-                "index": idx,
-                "price": c,
-                "confidence": "Medium",
-                "description": "Indecision / potential reversal"
-            })
-        
-        # Hammer (bullish)
-        if (lower_wick.iloc[i] > 2 * body_i) and (upper_wick.iloc[i] < body_i * 0.3) and (c > o):
-            patterns.append({
-                "type": "Hammer",
-                "direction": "Bullish",
-                "index": idx,
-                "price": c,
-                "confidence": "Medium",
-                "description": "Potential bullish reversal"
-            })
-        
-        # Shooting Star (bearish)
-        if (upper_wick.iloc[i] > 2 * body_i) and (lower_wick.iloc[i] < body_i * 0.3) and (c < o):
-            patterns.append({
-                "type": "Shooting Star",
-                "direction": "Bearish",
-                "index": idx,
-                "price": c,
-                "confidence": "Medium",
-                "description": "Potential bearish reversal"
-            })
-        
+        bi, fi = body[i], full[i]
+        ui, li = upper[i], lower[i]
+        bull = c[i] > o[i]
+        bear = c[i] < o[i]
+        ab = avg_body[i] if not np.isnan(avg_body[i]) and avg_body[i] > 0 else bi
+        slope = _trend_slope(c[: i + 1], 8)
+
+        # --- Single-candle ---
+        # Doji (tight body)
+        if bi / fi < 0.08:
+            conf = "High" if bi / fi < 0.04 else "Medium"
+            add(i, "Doji", "Neutral", conf, "Indecision — possible pause/reversal")
+
+        # Spinning top
+        elif bi / fi < 0.25 and ui > 0.2 * fi and li > 0.2 * fi:
+            add(i, "Spinning Top", "Neutral", "Low", "Indecision with upper & lower wicks")
+
+        # Marubozu (little/no wick)
+        if bi / fi > 0.88:
+            if bull:
+                add(i, "Bullish Marubozu", "Bullish", "Medium", "Strong buying, full-range close")
+            elif bear:
+                add(i, "Bearish Marubozu", "Bearish", "Medium", "Strong selling, full-range close")
+
+        # Hammer — prefer after decline
+        if li >= 2.0 * max(bi, 1e-12) and ui <= 0.35 * max(bi, 1e-12) and bi / fi < 0.4:
+            conf = "High" if slope < -0.01 else ("Medium" if slope <= 0 else "Low")
+            if conf != "Low" or slope < 0:
+                add(i, "Hammer", "Bullish", conf if slope < 0 else "Low",
+                    "Long lower wick — bullish reversal if after a decline")
+
+        # Inverted Hammer
+        if ui >= 2.0 * max(bi, 1e-12) and li <= 0.35 * max(bi, 1e-12) and bi / fi < 0.4 and slope < -0.005:
+            add(i, "Inverted Hammer", "Bullish", "Medium", "Long upper wick after decline — possible bottom")
+
+        # Hanging Man (same shape as hammer, after rise)
+        if li >= 2.0 * max(bi, 1e-12) and ui <= 0.35 * max(bi, 1e-12) and bi / fi < 0.4 and slope > 0.01:
+            add(i, "Hanging Man", "Bearish", "Medium", "Long lower wick after advance — possible top")
+
+        # Shooting Star — prefer after advance
+        if ui >= 2.0 * max(bi, 1e-12) and li <= 0.35 * max(bi, 1e-12) and bi / fi < 0.4:
+            conf = "High" if slope > 0.01 else ("Medium" if slope >= 0 else "Low")
+            if conf != "Low" or slope > 0:
+                add(i, "Shooting Star", "Bearish", conf if slope > 0 else "Low",
+                    "Long upper wick — bearish reversal if after a rally")
+
+        # --- Two-candle ---
+        if i < 1:
+            continue
+        prev_bull = c[i - 1] > o[i - 1]
+        prev_bear = c[i - 1] < o[i - 1]
+        prev_bi = body[i - 1]
+
         # Bullish Engulfing
-        if (prev_c < prev_o) and (c > o) and (c >= prev_o) and (o <= prev_c) and (body_i > body.iloc[i-1] * 1.1):
-            patterns.append({
-                "type": "Bullish Engulfing",
-                "direction": "Bullish",
-                "index": idx,
-                "price": c,
-                "confidence": "High",
-                "description": "Strong bullish reversal signal"
-            })
-        
+        if prev_bear and bull and c[i] >= o[i - 1] and o[i] <= c[i - 1] and bi > prev_bi * 1.05:
+            conf = "High" if slope < 0 else "Medium"
+            add(i, "Bullish Engulfing", "Bullish", conf, "Bullish candle engulfs prior bearish body")
+
         # Bearish Engulfing
-        if (prev_c > prev_o) and (c < o) and (c <= prev_o) and (o >= prev_c) and (body_i > body.iloc[i-1] * 1.1):
-            patterns.append({
-                "type": "Bearish Engulfing",
-                "direction": "Bearish",
-                "index": idx,
-                "price": c,
-                "confidence": "High",
-                "description": "Strong bearish reversal signal"
-            })
-    
-    # Keep only the most recent patterns (last 30 bars worth)
-    recent_cutoff = df.index[-min(40, len(df))]
-    patterns = [p for p in patterns if p["index"] >= recent_cutoff]
-    return patterns[-12:]  # limit to last 12 detections
+        if prev_bull and bear and c[i] <= o[i - 1] and o[i] >= c[i - 1] and bi > prev_bi * 1.05:
+            conf = "High" if slope > 0 else "Medium"
+            add(i, "Bearish Engulfing", "Bearish", conf, "Bearish candle engulfs prior bullish body")
+
+        # Piercing Line
+        if prev_bear and bull and o[i] < l[i - 1] and c[i] > (o[i - 1] + c[i - 1]) / 2 and c[i] < o[i - 1]:
+            add(i, "Piercing Line", "Bullish", "Medium", "Opens below prior low, closes above midpoint")
+
+        # Dark Cloud Cover
+        if prev_bull and bear and o[i] > h[i - 1] and c[i] < (o[i - 1] + c[i - 1]) / 2 and c[i] > o[i - 1]:
+            add(i, "Dark Cloud Cover", "Bearish", "Medium", "Opens above prior high, closes below midpoint")
+
+        # Tweezer Bottom
+        if i >= 1 and abs(l[i] - l[i - 1]) / max(abs(l[i]), 1e-12) < 0.0025 and prev_bear and bull:
+            add(i, "Tweezer Bottom", "Bullish", "Medium", "Matching lows — possible support")
+
+        # Tweezer Top
+        if i >= 1 and abs(h[i] - h[i - 1]) / max(abs(h[i]), 1e-12) < 0.0025 and prev_bull and bear:
+            add(i, "Tweezer Top", "Bearish", "Medium", "Matching highs — possible resistance")
+
+        # --- Three-candle ---
+        if i < 2:
+            continue
+        # Morning Star
+        mid_small = body[i - 1] < ab * 0.6
+        if (c[i - 2] < o[i - 2] and mid_small and bull
+                and c[i] > (o[i - 2] + c[i - 2]) / 2 and body[i - 2] > ab * 0.5):
+            add(i, "Morning Star", "Bullish", "High", "Three-bar bullish reversal sequence")
+
+        # Evening Star
+        if (c[i - 2] > o[i - 2] and mid_small and bear
+                and c[i] < (o[i - 2] + c[i - 2]) / 2 and body[i - 2] > ab * 0.5):
+            add(i, "Evening Star", "Bearish", "High", "Three-bar bearish reversal sequence")
+
+        # Three White Soldiers
+        if (c[i] > o[i] and c[i - 1] > o[i - 1] and c[i - 2] > o[i - 2]
+                and c[i] > c[i - 1] > c[i - 2]
+                and o[i] > o[i - 1] > o[i - 2]
+                and body[i] > ab * 0.5 and body[i - 1] > ab * 0.5):
+            add(i, "Three White Soldiers", "Bullish", "High", "Three strong consecutive advances")
+
+        # Three Black Crows
+        if (c[i] < o[i] and c[i - 1] < o[i - 1] and c[i - 2] < o[i - 2]
+                and c[i] < c[i - 1] < c[i - 2]
+                and o[i] < o[i - 1] < o[i - 2]
+                and body[i] > ab * 0.5 and body[i - 1] > ab * 0.5):
+            add(i, "Three Black Crows", "Bearish", "High", "Three strong consecutive declines")
+
+    # Keep last ~40 bars of signals, prefer higher confidence, cap count
+    if n > 40:
+        cutoff = idx[-40]
+        patterns = [p for p in patterns if p["index"] >= cutoff]
+    rank = {"High": 0, "Medium": 1, "Low": 2}
+    patterns.sort(key=lambda p: (rank.get(p["confidence"], 9),))
+    # Dedupe same type on same bar
+    seen = set()
+    deduped = []
+    for p in patterns:
+        key = (p["type"], str(p["index"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(p)
+    return deduped[:18]
 
 
 def detect_chart_patterns(df: pd.DataFrame) -> List[Dict]:
-    """Detect higher-level chart patterns (Double Top/Bottom, simple S/R)."""
-    patterns = []
-    if df is None or len(df) < 20 or "close" not in df.columns:
+    """Swing-based chart patterns: S/R, double top/bottom, simple H&S / inv H&S."""
+    patterns: List[Dict] = []
+    if df is None or len(df) < 30 or "high" not in df.columns:
         return patterns
-    
-    closes = df["close"].values
-    highs = df["high"].values if "high" in df.columns else closes
-    lows = df["low"].values if "low" in df.columns else closes
+
+    highs = df["high"].values.astype(float)
+    lows = df["low"].values.astype(float)
+    closes = df["close"].values.astype(float)
     idx = df.index
-    
-    # --- Simple Support & Resistance (local peaks/troughs) ---
-    window = 5
-    for i in range(window, len(df) - window):
-        # Local high (resistance)
-        if highs[i] == max(highs[i-window:i+window+1]):
-            patterns.append({
-                "type": "Resistance",
-                "direction": "Neutral",
-                "index": idx[i],
-                "price": highs[i],
-                "confidence": "Medium",
-                "description": f"Local resistance @ {highs[i]:.2f}"
-            })
-        # Local low (support)
-        if lows[i] == min(lows[i-window:i+window+1]):
-            patterns.append({
-                "type": "Support",
-                "direction": "Neutral",
-                "index": idx[i],
-                "price": lows[i],
-                "confidence": "Medium",
-                "description": f"Local support @ {lows[i]:.2f}"
-            })
-    
-    # --- Double Top / Double Bottom (simplified) ---
-    lookback = min(60, len(df) - 10)
-    recent_highs = []
-    recent_lows = []
-    
-    for i in range(len(df) - lookback, len(df) - 3):
-        if highs[i] == max(highs[max(0, i-4):i+5]):
-            recent_highs.append((i, highs[i]))
-        if lows[i] == min(lows[max(0, i-4):i+5]):
-            recent_lows.append((i, lows[i]))
-    
-    # Double Top
-    if len(recent_highs) >= 2:
-        for j in range(len(recent_highs) - 1):
-            i1, p1 = recent_highs[j]
-            i2, p2 = recent_highs[j+1]
-            if abs(p1 - p2) / p1 < 0.025 and (i2 - i1) > 5:  # within 2.5% and separated
+    n = len(df)
+    win = 4  # local swing window
+
+    def is_swing_high(i):
+        lo, hi = max(0, i - win), min(n, i + win + 1)
+        return highs[i] >= np.max(highs[lo:hi]) - 1e-12
+
+    def is_swing_low(i):
+        lo, hi = max(0, i - win), min(n, i + win + 1)
+        return lows[i] <= np.min(lows[lo:hi]) + 1e-12
+
+    swing_h = [(i, highs[i]) for i in range(win, n - win) if is_swing_high(i)]
+    swing_l = [(i, lows[i]) for i in range(win, n - win) if is_swing_low(i)]
+
+    # Recent support / resistance (last few swings only)
+    for i, px in swing_h[-3:]:
+        patterns.append({
+            "type": "Resistance",
+            "direction": "Neutral",
+            "index": idx[i],
+            "price": float(px),
+            "confidence": "Medium",
+            "description": f"Swing resistance @ {px:.4g}",
+        })
+    for i, px in swing_l[-3:]:
+        patterns.append({
+            "type": "Support",
+            "direction": "Neutral",
+            "index": idx[i],
+            "price": float(px),
+            "confidence": "Medium",
+            "description": f"Swing support @ {px:.4g}",
+        })
+
+    # Double Top: two highs within 1.5%, separated, with lower low between, prefer second near end
+    if len(swing_h) >= 2:
+        for j in range(len(swing_h) - 1, 0, -1):
+            i2, p2 = swing_h[j]
+            i1, p1 = swing_h[j - 1]
+            if i2 - i1 < 6:
+                continue
+            if abs(p1 - p2) / max(p1, 1e-12) > 0.015:
+                continue
+            neck = float(np.min(lows[i1:i2 + 1]))
+            if neck >= min(p1, p2) * 0.995:
+                continue
+            # Prefer when price has left the second peak
+            conf = "High" if closes[-1] < (p2 + neck) / 2 else "Medium"
+            if i2 >= n - 45:
                 patterns.append({
                     "type": "Double Top",
                     "direction": "Bearish",
                     "index": idx[i2],
-                    "price": p2,
-                    "confidence": "Medium",
-                    "description": f"Double Top near {p2:.2f}"
+                    "price": float(p2),
+                    "confidence": conf,
+                    "description": f"Double top ~{p2:.4g}, neckline ~{neck:.4g}",
                 })
                 break
-    
+
     # Double Bottom
-    if len(recent_lows) >= 2:
-        for j in range(len(recent_lows) - 1):
-            i1, p1 = recent_lows[j]
-            i2, p2 = recent_lows[j+1]
-            if abs(p1 - p2) / p1 < 0.025 and (i2 - i1) > 5:
+    if len(swing_l) >= 2:
+        for j in range(len(swing_l) - 1, 0, -1):
+            i2, p2 = swing_l[j]
+            i1, p1 = swing_l[j - 1]
+            if i2 - i1 < 6:
+                continue
+            if abs(p1 - p2) / max(abs(p1), 1e-12) > 0.015:
+                continue
+            neck = float(np.max(highs[i1:i2 + 1]))
+            if neck <= max(p1, p2) * 1.005:
+                continue
+            conf = "High" if closes[-1] > (p2 + neck) / 2 else "Medium"
+            if i2 >= n - 45:
                 patterns.append({
                     "type": "Double Bottom",
                     "direction": "Bullish",
                     "index": idx[i2],
-                    "price": p2,
-                    "confidence": "Medium",
-                    "description": f"Double Bottom near {p2:.2f}"
+                    "price": float(p2),
+                    "confidence": conf,
+                    "description": f"Double bottom ~{p2:.4g}, neckline ~{neck:.4g}",
                 })
                 break
-    
-    # Keep only reasonably recent
-    if len(df) > 50:
-        cutoff = df.index[-50]
-        patterns = [p for p in patterns if p["index"] >= cutoff]
-    
+
+    # Very simple Head & Shoulders: 3 swing highs, middle highest
+    if len(swing_h) >= 3:
+        a, b, c_ = swing_h[-3], swing_h[-2], swing_h[-1]
+        if b[1] > a[1] and b[1] > c_[1] and abs(a[1] - c_[1]) / max(b[1], 1e-12) < 0.03:
+            if c_[0] - a[0] >= 10 and c_[0] >= n - 50:
+                patterns.append({
+                    "type": "Head & Shoulders",
+                    "direction": "Bearish",
+                    "index": idx[c_[0]],
+                    "price": float(c_[1]),
+                    "confidence": "Medium",
+                    "description": f"H&S structure, head ~{b[1]:.4g}",
+                })
+
+    # Inverse H&S: 3 swing lows, middle lowest
+    if len(swing_l) >= 3:
+        a, b, c_ = swing_l[-3], swing_l[-2], swing_l[-1]
+        if b[1] < a[1] and b[1] < c_[1] and abs(a[1] - c_[1]) / max(abs(b[1]), 1e-12) < 0.03:
+            if c_[0] - a[0] >= 10 and c_[0] >= n - 50:
+                patterns.append({
+                    "type": "Inverse Head & Shoulders",
+                    "direction": "Bullish",
+                    "index": idx[c_[0]],
+                    "price": float(c_[1]),
+                    "confidence": "Medium",
+                    "description": f"Inv H&S structure, head ~{b[1]:.4g}",
+                })
+
     return patterns
 
 
 def detect_all_patterns(df: pd.DataFrame) -> List[Dict]:
-    """Run all pattern detectors and return combined list."""
+    """Run all pattern detectors and return combined, confidence-sorted list."""
     candle = detect_candlestick_patterns(df)
     chart = detect_chart_patterns(df)
-    return candle + chart
+    combined = candle + chart
+    rank = {"High": 0, "Medium": 1, "Low": 2}
+    combined.sort(key=lambda p: (rank.get(p.get("confidence"), 9), str(p.get("index"))))
+    return combined
 
 
 def add_patterns_to_chart(fig: go.Figure, patterns: List[Dict], row: int = 1) -> go.Figure:
@@ -835,12 +966,27 @@ def add_patterns_to_chart(fig: go.Figure, patterns: List[Dict], row: int = 1) ->
     
     symbol_map = {
         "Doji": "diamond",
+        "Spinning Top": "diamond",
         "Hammer": "triangle-up",
+        "Inverted Hammer": "triangle-up",
+        "Hanging Man": "triangle-down",
         "Shooting Star": "triangle-down",
         "Bullish Engulfing": "star",
         "Bearish Engulfing": "star",
+        "Piercing Line": "star",
+        "Dark Cloud Cover": "star",
+        "Morning Star": "star",
+        "Evening Star": "star",
+        "Three White Soldiers": "triangle-up",
+        "Three Black Crows": "triangle-down",
+        "Bullish Marubozu": "square",
+        "Bearish Marubozu": "square",
+        "Tweezer Bottom": "circle",
+        "Tweezer Top": "circle",
         "Double Top": "x",
         "Double Bottom": "x",
+        "Head & Shoulders": "x",
+        "Inverse Head & Shoulders": "x",
         "Support": "circle",
         "Resistance": "circle",
     }
@@ -1870,7 +2016,7 @@ with st.sidebar.expander("More indicators", expanded=False):
     show_vs_btc = st.checkbox("vs BTC", value=False)
     show_onchain = st.checkbox("On-chain metrics", value=False)
     show_patterns = st.checkbox("Pattern recognition", value=False)
-    st.caption("Patterns: Doji, Hammer, Engulfing, Double Top/Bottom, S/R")
+    st.caption("Doji, Hammer, Stars, Engulfing, Morning/Evening Star, Soldiers/Crows, H&S, Double Top/Bottom, S/R")
 
 
 st.sidebar.subheader("🔑 Optional API Keys")
