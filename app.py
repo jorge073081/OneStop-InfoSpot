@@ -539,6 +539,45 @@ def load_fred_dashboard(api_key: str) -> Dict[str, pd.DataFrame]:
 # ============================================================
 # SHARED / LAZY DATA LAYER (one fetch per ticker+resolution combo)
 # ============================================================
+
+@st.cache_data(ttl=60, show_spinner=False)
+def load_live_board(symbols: Tuple[str, ...] = None) -> pd.DataFrame:
+    """Quick last price + session change for a fixed board of stocks & crypto."""
+    if symbols is None:
+        symbols = (
+            "SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA",
+            "BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD",
+        )
+    rows = []
+    def _one(sym: str):
+        try:
+            h = yf.Ticker(sym).history(period="5d", interval="1d", auto_adjust=True)
+            if h is None or h.empty or "Close" not in h.columns:
+                return None
+            px = float(h["Close"].iloc[-1])
+            prev = float(h["Close"].iloc[-2]) if len(h) > 1 else px
+            ch = ((px / prev) - 1) * 100 if prev else 0.0
+            return {"Symbol": sym, "Price": px, "Chg%": ch}
+        except Exception:
+            return None
+    workers = min(8, len(symbols))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for fut in as_completed({ex.submit(_one, s): s for s in symbols}):
+            try:
+                r = fut.result()
+                if r:
+                    rows.append(r)
+            except Exception:
+                pass
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    # Keep a stable display order
+    order = {s: i for i, s in enumerate(symbols)}
+    df["_ord"] = df["Symbol"].map(lambda x: order.get(x, 999))
+    df = df.sort_values("_ord").drop(columns=["_ord"])
+    return df
+
 def get_shared_market_data(tickers, interval, lookback, period, is_6h):
     """Fetch once per unique config; reuse across tabs in the same run via session_state."""
     key = ("mkt", tuple(tickers), interval, lookback, period, is_6h)
@@ -2208,6 +2247,53 @@ if nav == "☀️ Briefing":
             c[5].metric("TVL", f"${defi_snap['total_tvl']/1e9:.1f}B")
         else:
             c[5].metric("TVL", "—")
+
+        # --- Live market board (stocks + crypto) ---
+        st.markdown("##### Live market board")
+        st.caption("Major ETFs, mega-cap stocks, and crypto — last daily close & change (Yahoo, ~1 min cache)")
+        try:
+            board = load_live_board()
+            if board is not None and not board.empty:
+                # Split stocks vs crypto for readability
+                crypto_syms = {"BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD"}
+                stocks = board[~board["Symbol"].isin(crypto_syms)]
+                cryptos = board[board["Symbol"].isin(crypto_syms)]
+                b1, b2 = st.columns(2)
+                with b1:
+                    st.markdown("**Stocks / ETFs**")
+                    if not stocks.empty:
+                        disp = stocks.copy()
+                        disp["Price"] = disp["Price"].map(lambda x: f"${x:,.2f}")
+                        disp["Chg%"] = disp["Chg%"].map(lambda x: f"{x:+.2f}%")
+                        st.dataframe(disp, use_container_width=True, hide_index=True)
+                with b2:
+                    st.markdown("**Crypto**")
+                    if not cryptos.empty:
+                        disp = cryptos.copy()
+                        disp["Price"] = disp.apply(
+                            lambda r: f"${r['Price']:,.2f}" if r["Price"] >= 1 else f"${r['Price']:,.4f}",
+                            axis=1,
+                        )
+                        disp["Chg%"] = disp["Chg%"].map(lambda x: f"{x:+.2f}%")
+                        st.dataframe(disp, use_container_width=True, hide_index=True)
+                    # Also surface user tickers live if different
+                    if brief_data:
+                        extra = []
+                        for t, df in brief_data.items():
+                            if df is None or df.empty or "close" not in df.columns:
+                                continue
+                            if t in crypto_syms:
+                                continue
+                            px = float(df["close"].iloc[-1])
+                            ch = (px / float(df["close"].iloc[-2]) - 1) * 100 if len(df) > 1 else 0
+                            extra.append({"Symbol": t, "Price": f"${px:,.4g}", "Chg%": f"{ch:+.2f}%"})
+                        if extra:
+                            st.markdown("**Your tickers**")
+                            st.dataframe(pd.DataFrame(extra), use_container_width=True, hide_index=True)
+            else:
+                st.caption("Live board temporarily unavailable.")
+        except Exception:
+            st.caption("Live board temporarily unavailable.")
 
         st.markdown("---")
         left, right = st.columns(2)
