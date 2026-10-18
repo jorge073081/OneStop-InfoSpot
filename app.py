@@ -1505,10 +1505,28 @@ def build_asset_chart(
 ) -> go.Figure:
     h_data = h_data.copy()
     # --- Chart cutoff fixes ---
-    # Drop rows with no close; drop trailing NaN-only tail so the x-axis doesn't pad empty space
     if "close" in h_data.columns:
         h_data = h_data.dropna(subset=["close"])
-    h_data = h_data.loc[: h_data.last_valid_index()] if len(h_data) else h_data
+    if len(h_data) > 0:
+        h_data = h_data.loc[: h_data.last_valid_index()]
+    # Drop trailing bars separated by a large time gap (orphan candle on the right)
+    if len(h_data) >= 5:
+        try:
+            idx = pd.DatetimeIndex(h_data.index)
+            deltas = idx.to_series().diff().dropna()
+            med = deltas.median()
+            if pd.notna(med) and med > pd.Timedelta(0):
+                keep_until = len(h_data)
+                for i in range(len(h_data) - 1, 0, -1):
+                    gap = idx[i] - idx[i - 1]
+                    if gap > med * 4:
+                        keep_until = i
+                    else:
+                        break
+                if keep_until < len(h_data):
+                    h_data = h_data.iloc[:keep_until]
+        except Exception:
+            pass
     # SMA200 is meaningless / flat on short intraday windows — auto-disable unless enough bars
     effective_sma200 = show_sma200 and "sma200" in h_data.columns and h_data["sma200"].notna().sum() >= 30
     if show_baseline and "close" in h_data.columns and len(h_data):
@@ -1647,10 +1665,16 @@ def build_asset_chart(
         xaxis_rangeslider_visible=False,
         font=dict(family="Outfit, sans-serif"),
     )
-    # Pin all shared x-axes to actual data range (stops empty right-side cutoff)
+    # After gap cleanup, pin x-axis tightly to remaining bars
     x_range = None
     if len(h_data) > 0:
-        x_range = [h_data.index[0], h_data.index[-1]]
+        x0, x1 = h_data.index[0], h_data.index[-1]
+        try:
+            span = pd.Timestamp(x1) - pd.Timestamp(x0)
+            pad = span * 0.01 if span > pd.Timedelta(0) else pd.Timedelta(minutes=5)
+            x_range = [pd.Timestamp(x0), pd.Timestamp(x1) + pad]
+        except Exception:
+            x_range = [x0, x1]
     for i in range(1, rows + 1):
         fig.update_xaxes(
             rangeslider_visible=False,
