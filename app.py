@@ -293,6 +293,66 @@ def safe_float(value, default=None) -> Optional[float]:
     except (TypeError, ValueError):
         return default
 
+
+def normalize_user_tickers(raw_tickers: List[str]) -> List[str]:
+    """
+    Let users type BTC, ETH, SOL without -USD.
+    Stocks/ETFs (AAPL, SPY, …) stay unchanged.
+    """
+    # Liquid equities / ETFs that must NOT get -USD
+    equity = {
+        "SPY", "QQQ", "IWM", "DIA", "VOO", "VTI", "EFA", "EEM", "TLT", "HYG",
+        "GLD", "SLV", "USO", "UNG", "ARKK", "ARKG", "SMH", "XBI", "XLF", "XLE",
+        "XLK", "XLV", "XLI", "XLY", "XLP", "XLU", "XLB", "XLRE", "KRE", "IYR", "VNQ",
+        "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "GOOG", "META", "TSLA", "BRK-B", "BRK.B",
+        "JPM", "V", "MA", "UNH", "XOM", "JNJ", "WMT", "PG", "HD", "COST", "ORCL", "CRM",
+        "AMD", "NFLX", "ADBE", "PEP", "KO", "MRK", "ABBV", "CVX", "BAC", "WFC", "GS",
+        "IBM", "CAT", "BA", "GE", "DIS", "MCD", "NKE", "INTC", "QCOM", "TXN", "AMAT",
+        "MU", "ARM", "TSM", "NOW", "INTU", "PANW", "UBER", "PLTR", "COIN", "HOOD",
+        "SHOP", "SNOW", "CRWD", "NET", "AVGO", "LLY", "T", "VZ", "PFE",
+    }
+    out = []
+    for t in raw_tickers:
+        t = (t or "").strip().upper().replace(" ", "")
+        if not t:
+            continue
+        # Yahoo futures / forex leave as-is
+        if t.endswith("=F") or t.endswith("=X") or "^" in t:
+            out.append(t)
+            continue
+        # Already pair-like
+        if t.endswith("-USD") or t.endswith("-USDT") or t.endswith("-USDC"):
+            out.append(t.replace("-USDT", "-USD").replace("-USDC", "-USD"))
+            continue
+        # BTCUSD / ETHUSDT glued forms
+        for suf in ("USDT", "USD", "USDC"):
+            if t.endswith(suf) and len(t) > len(suf):
+                base = t[: -len(suf)]
+                if base.isalpha() and 2 <= len(base) <= 10:
+                    t = base + "-USD"
+                    break
+        if t.endswith("-USD"):
+            out.append(t)
+            continue
+        # Known equity / ETF
+        if t in equity or t.replace(".", "-") in equity:
+            out.append(t.replace(".", "-"))
+            continue
+        # Plain symbol → treat as crypto pair for this app
+        if t.replace("-", "").isalnum() and "-" not in t and t.isalpha() and 2 <= len(t) <= 10:
+            out.append(t + "-USD")
+            continue
+        out.append(t)
+    # dedupe preserve order
+    seen = set()
+    final = []
+    for t in out:
+        if t not in seen:
+            seen.add(t)
+            final.append(t)
+    return final
+
+
 def normalize_columns(df: pd.DataFrame, target_ticker: Optional[str] = None) -> pd.DataFrame:
     if df is None or df.empty:
         return df
@@ -2406,13 +2466,7 @@ if not st.session_state.url_tickers_applied:
             if isinstance(raw, list):
                 raw = ",".join(raw)
             parsed = [t.strip().upper() for t in str(raw).replace(" ", ",").split(",") if t.strip()]
-            # normalize: allow BTC -> BTC-USD for plain symbols
-            norm = []
-            for t in parsed:
-                if t and "-" not in t and t.isalpha() and len(t) <= 10:
-                    norm.append(t + "-USD")
-                else:
-                    norm.append(t)
+            norm = normalize_user_tickers(parsed)
             if norm:
                 st.session_state.main_tickers_value = ", ".join(norm[:6])
         st.session_state.url_tickers_applied = True
@@ -2422,18 +2476,28 @@ if not st.session_state.url_tickers_applied:
 t_raw = st.sidebar.text_input(
     "Enter Tickers (commas):",
     value=st.session_state.main_tickers_value,
-    key="main_tickers_input"
+    key="main_tickers_input",
+    help="Crypto: type BTC, ETH, SOL (auto -USD). Stocks/ETFs: AAPL, SPY, etc.",
 )
 # Keep session state in sync when user types
 if t_raw != st.session_state.main_tickers_value:
     st.session_state.main_tickers_value = t_raw
 
 tkrs = [t.strip().upper() for t in st.session_state.main_tickers_value.split(",") if t.strip()]
+tkrs = normalize_user_tickers(tkrs)
 # Performance cap — free Yahoo endpoints stay responsive
 MAX_TICKERS = 6
 if len(tkrs) > MAX_TICKERS:
     st.sidebar.warning(f"Using first {MAX_TICKERS} tickers (max for speed).")
     tkrs = tkrs[:MAX_TICKERS]
+# Reflect normalized symbols in the sidebar field (BTC -> BTC-USD) without fighting mid-typing too hard
+_norm_display = ", ".join(tkrs)
+if tkrs and _norm_display != st.session_state.main_tickers_value and all(
+    len(x) > 2 for x in st.session_state.main_tickers_value.replace(" ", "").split(",") if x
+):
+    # Only sync when user finished a token (avoid rewriting while typing "BT")
+    if not st.session_state.main_tickers_value.strip().endswith(","):
+        st.session_state.main_tickers_value = _norm_display
 
 # Keep URL in sync so the address bar is shareable
 try:
@@ -2479,7 +2543,8 @@ with st.sidebar.expander("More indicators", expanded=False):
     show_long_baseline = st.checkbox("Long-term baseline", value=False)
     show_vwap = st.checkbox("VWAP", value=False)
     show_vs_btc = st.checkbox("vs BTC", value=False)
-    show_onchain = st.checkbox("On-chain metrics", value=False)
+    # On-chain metrics always on under Crypto tab (no sidebar toggle)
+    show_onchain = True
     show_patterns = st.checkbox("Pattern recognition", value=False)
     st.caption("Doji, Hammer, Stars, Engulfing, Morning/Evening Star, Soldiers/Crows, H&S, Double Top/Bottom, S/R")
 
@@ -3128,7 +3193,7 @@ if nav == "⚡ Crypto":
                     "Funding Rate": f"{funding:+.4f}%" if funding is not None else "N/A",
                     "Source": source_label,
                 })
-                if show_onchain and ("-USD" in t or t.replace("-", "").isalpha()):
+                if "-USD" in t or t.replace("-", "").isalpha():
                     onchain_profiles[t] = get_real_onchain(t)
                 if t in daily_pivots:
                     p = daily_pivots[t]
@@ -3175,7 +3240,7 @@ if nav == "⚡ Crypto":
                                     paper_bgcolor="#0e1117", plot_bgcolor="#0e1117", yaxis_title="%",
                                     font=dict(family="IBM Plex Sans, sans-serif"))
                 st.plotly_chart(fig_c, use_container_width=True)
-            if show_onchain and onchain_profiles:
+            if onchain_profiles:
                 st.subheader("🔗 Real On-chain Metrics")
                 for ticker, metrics in onchain_profiles.items():
                     st.markdown(f"**{ticker}**")
