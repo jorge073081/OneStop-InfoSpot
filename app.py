@@ -2523,6 +2523,7 @@ _view_map = {
     "crypto": "🌐 Crypto/Macro",
     "compare": "🔀 Compare",
     "macro": "🌐 Crypto/Macro",
+    "news": "📰 LiveMacro/CryptoNews",
     "predictive": "🔮 Predictive",
     "analysis": "📊 Analysis",
     "screener": "🔎 Screener",
@@ -2537,7 +2538,7 @@ except Exception:
 
 nav = st.radio(
     "Navigate",
-    ["☀️ Briefing", "📈 Chart", "🔀 Compare", "🌐 Crypto/Macro", "🔮 Predictive", "📊 Analysis", "🔎 Screener", "🛠️ Tools"],
+    ["☀️ Briefing", "📈 Chart", "🔀 Compare", "🌐 Crypto/Macro", "📰 LiveMacro/CryptoNews", "🔮 Predictive", "📊 Analysis", "🔎 Screener", "🛠️ Tools"],
     horizontal=True,
     label_visibility="collapsed",
     key="main_nav",
@@ -3317,40 +3318,85 @@ if nav == "🌐 Crypto/Macro":
         st.caption("DefiLlama data temporarily unavailable.")
 
 
-    st.markdown("---")
-    st.subheader("📰 Live Crypto News & Sentiment")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("##### Headlines")
-        pulse_key = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
-        news = get_crypto_news(cache_buster=pulse_key)
-        if news:
-            sia = SIA()
-            for art in news:
-                with st.expander(art["title"]):
-                    score = sia.polarity_scores(art["title"])["compound"]
-                    if score >= 0.05:
-                        status_badge = '<span style="color:#00FF7F; font-weight:bold;">Bullish</span>'
-                    elif score <= -0.05:
-                        status_badge = '<span style="color:#FF4500; font-weight:bold;">Bearish</span>'
-                    else:
-                        status_badge = '<span style="color:#00FFFF; font-weight:bold;">Neutral</span>'
-                    html_body = f"""
+
+if nav == "📰 LiveMacro/CryptoNews":
+    st.subheader("📰 Live Macro / Crypto News")
+    st.caption("Fed · SEC · Stocks · Crypto headlines with sentiment. Briefing headlines are unchanged.")
+
+    fng_v, fng_c = get_fear_greed()
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Fear & Greed", f"{fng_v}/100", str(fng_c)[:20] if fng_c else "")
+    m2.metric("Sources", "Fed · SEC · Stocks · Crypto")
+    m3.caption("Cached ~3 min · free RSS")
+
+    try:
+        all_news = get_market_news(
+            cache_buster=pd.Timestamp.now().strftime("%Y-%m-%d %H"),
+            max_items=48,
+        )
+    except Exception:
+        all_news = []
+
+    try:
+        crypto_only = get_crypto_news(
+            cache_buster=pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"),
+            max_items=20,
+        )
+    except Exception:
+        crypto_only = []
+
+    sia = SIA()
+
+    def _render_article_list(items, empty_msg="No articles right now."):
+        if not items:
+            st.info(empty_msg)
+            return
+        for art in items:
+            title = art.get("title") or "Untitled"
+            with st.expander(title):
+                score = sia.polarity_scores(title)["compound"]
+                if score >= 0.05:
+                    status_badge = '<span style="color:#22c55e; font-weight:bold;">Bullish</span>'
+                elif score <= -0.05:
+                    status_badge = '<span style="color:#ef4444; font-weight:bold;">Bearish</span>'
+                else:
+                    status_badge = '<span style="color:#94a3b8; font-weight:bold;">Neutral</span>'
+                src = art.get("source") or ""
+                pub = art.get("published") or ""
+                cat = art.get("category") or ""
+                summary = art.get("summary") or ""
+                link = art.get("link") or "#"
+                st.markdown(
+                    f"""
                     <div class="news-box">
                         <p class="news-meta">
-                            <strong>{art['source']}</strong> • {art['published']} • Sentiment: {status_badge} ({score:+.2f})
+                            <strong>{src}</strong>
+                            {" · " + cat if cat else ""}
+                            {" · " + pub if pub else ""}
+                            · Sentiment: {status_badge} ({score:+.2f})
                         </p>
-                        <p class="news-summary">{art['summary'] if art['summary'] else ''}</p>
-                        <a href="{art['link']}" target="_blank" class="news-action-link">Open Article ↗</a>
+                        <p class="news-summary">{summary}</p>
+                        <a href="{link}" target="_blank" class="news-action-link">Open Article ↗</a>
                     </div>
-                    """
-                    st.markdown(html_body, unsafe_allow_html=True)
-        else:
-            st.info("No news articles available right now. Try refreshing.")
-    with col2:
-        st.markdown("##### Sentiment")
-        fng_v, fng_c = get_fear_greed()
-        st.metric("Fear & Greed Index", f"{fng_v}/100", fng_c)
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+    tab_macro, tab_crypto, tab_all = st.tabs(["Macro / Policy", "Crypto", "All mixed"])
+
+    with tab_macro:
+        st.markdown("##### Fed · SEC · Stocks")
+        macro_items = [a for a in (all_news or []) if a.get("category") in ("Fed", "SEC", "Stocks")]
+        _render_article_list(macro_items, "No macro/policy headlines right now.")
+
+    with tab_crypto:
+        st.markdown("##### Crypto desk feed")
+        _render_article_list(crypto_only or [a for a in (all_news or []) if a.get("category") == "Crypto"],
+                             "No crypto headlines right now.")
+
+    with tab_all:
+        st.markdown("##### Combined feed")
+        _render_article_list(all_news, "No headlines available.")
 
 # ============================================================
 # PREDICTIVE ANALYTICS TAB
