@@ -74,7 +74,60 @@ st.markdown(
             overflow: visible !important;
         }
 
+        .pulse-hero {
+            text-align: center;
+            padding: 1rem 1.25rem 1.15rem 1.25rem;
+            margin: 0.5rem 0 1rem 0;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            background: linear-gradient(180deg, #141a24 0%, #0b0e11 100%);
+        }
+        .pulse-label {
+            font-size: 0.75rem;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 0.35rem;
+        }
+        .pulse-sym {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 0.15rem;
+        }
+        .pulse-chg {
+            font-family: 'IBM Plex Mono', monospace !important;
+            font-size: 2.6rem;
+            font-weight: 600;
+            line-height: 1.15;
+            margin: 0.2rem 0;
+        }
+        .pulse-chg.up { color: #22c55e; }
+        .pulse-chg.down { color: #ef4444; }
+        .pulse-sub {
+            font-size: 0.85rem;
+            color: var(--muted);
+        }
+        .pulse-tape {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            justify-content: center;
+            margin-top: 0.75rem;
+        }
+        .pulse-chip {
+            font-family: 'IBM Plex Mono', monospace !important;
+            font-size: 0.8rem;
+            padding: 0.25rem 0.55rem;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            background: #12161c;
+        }
+        .pulse-chip.up { color: #22c55e; border-color: rgba(34,197,94,0.35); }
+        .pulse-chip.down { color: #ef4444; border-color: rgba(239,68,68,0.35); }
+
         .app-header {
+
             text-align: center !important;
             padding: 0.35rem 0.5rem 0.6rem 0.5rem !important;
             margin: 0 0 0.35rem 0 !important;
@@ -706,6 +759,47 @@ def load_live_board(symbols: Tuple[str, ...] = None) -> pd.DataFrame:
     df = df.sort_values("_ord").drop(columns=["_ord"])
     return df
 
+
+
+
+def update_and_diff_last_visit(prices: Dict[str, float], min_age_sec: int = 120) -> List[str]:
+    """Compare current prices to last snapshot; only refresh baseline after min_age (survives auto-refresh)."""
+    if not prices:
+        return []
+    prev = st.session_state.get("_last_visit_prices") or {}
+    prev_ts = st.session_state.get("_last_visit_ts")
+    lines = []
+    now = time.time()
+    age = (now - float(prev_ts)) if prev_ts else None
+    if prev and isinstance(prev, dict) and age is not None and age >= min_age_sec:
+        if age < 3600:
+            ago = f" · {int(age // 60)}m ago"
+        else:
+            ago = f" · {int(age // 3600)}h ago"
+        for sym, px in prices.items():
+            try:
+                px = float(px)
+                old = prev.get(sym)
+                if old is None:
+                    continue
+                old = float(old)
+                if old <= 0:
+                    continue
+                ch = (px / old - 1) * 100
+                if abs(ch) < 0.05:
+                    lines.append(f"{sym.replace('-USD', '')} flat")
+                else:
+                    lines.append(f"{sym.replace('-USD', '')} {ch:+.2f}%")
+            except Exception:
+                continue
+        st.session_state["_last_visit_ago"] = ago
+    # Establish or roll baseline: first time, or after 15 minutes
+    if not prev or age is None or age >= 900:
+        st.session_state["_last_visit_prices"] = {
+            k: float(v) for k, v in prices.items() if v is not None
+        }
+        st.session_state["_last_visit_ts"] = now
+    return lines[:8]
 
 
 def get_us_session_label(now_utc: Optional[pd.Timestamp] = None) -> Dict[str, str]:
@@ -2872,6 +2966,105 @@ if nav == "☀️ Briefing":
         except Exception:
             pass
         st.markdown(f"**Regime read:** {regime}")
+
+        # --- MARKET PULSE (attention hero) ---
+        try:
+            _pulse_board = load_live_board()
+            st.session_state["_brief_board"] = _pulse_board
+            _movers = []
+            if _pulse_board is not None and not _pulse_board.empty and "Chg%" in _pulse_board.columns:
+                for _, _r in _pulse_board.iterrows():
+                    try:
+                        _movers.append((str(_r["Symbol"]), float(_r["Chg%"]), _r.get("Price")))
+                    except Exception:
+                        continue
+            # Include sidebar tickers from brief_data if available
+            if brief_data:
+                for _t, _df in brief_data.items():
+                    if _df is None or _df.empty or "close" not in _df.columns or len(_df) < 2:
+                        continue
+                    try:
+                        _ch = (float(_df["close"].iloc[-1]) / float(_df["close"].iloc[-2]) - 1) * 100
+                        _movers.append((_t, _ch, float(_df["close"].iloc[-1])))
+                    except Exception:
+                        pass
+            # dedupe by symbol keep first
+            _seen = set()
+            _uniq = []
+            for _s, _c, _p in _movers:
+                if _s in _seen:
+                    continue
+                _seen.add(_s)
+                _uniq.append((_s, _c, _p))
+            if _uniq:
+                _uniq.sort(key=lambda x: abs(x[1]), reverse=True)
+                _top = _uniq[0]
+                _sym, _chg, _px = _top
+                _cls = "up" if _chg >= 0 else "down"
+                _dir = "leading the board" if _chg >= 0 else "heaviest pressure"
+                _px_s = format_price(_px) if _px is not None else ""
+                _chips = []
+                for _s, _c, _ in _uniq[1:6]:
+                    _ccls = "up" if _c >= 0 else "down"
+                    _chips.append(
+                        f"<span class='pulse-chip {_ccls}'>{_s.replace('-USD','')} {_c:+.2f}%</span>"
+                    )
+                _chip_html = "".join(_chips)
+                st.markdown(
+                    f"""
+                    <div class="pulse-hero">
+                      <div class="pulse-label">Market pulse</div>
+                      <div class="pulse-sym">{_sym.replace("-USD", "")} {_px_s}</div>
+                      <div class="pulse-chg {_cls}">{_chg:+.2f}%</div>
+                      <div class="pulse-sub">{_dir} · live board + your tickers</div>
+                      <div class="pulse-tape">{_chip_html}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+        except Exception:
+            pass
+
+        # --- Event banner (today / tomorrow / next 2 weeks) ---
+        try:
+            _cal = get_economic_calendar(days_ahead=14)
+            if _cal is not None and not _cal.empty:
+                _hot = _cal[_cal["Days"] <= 1]
+                if not _hot.empty:
+                    _ev = " · ".join(
+                        [
+                            f"**{r.Event}** ({'today' if int(r.Days) == 0 else 'tomorrow'})"
+                            for _, r in _hot.head(3).iterrows()
+                        ]
+                    )
+                    st.warning(f"📅 Event window: {_ev} — expect volatility around the print.")
+                else:
+                    _next = _cal.sort_values("Days").iloc[0]
+                    _when = "today" if int(_next["Days"]) == 0 else (
+                        "tomorrow" if int(_next["Days"]) == 1 else f"in {int(_next['Days'])} days"
+                    )
+                    st.info(
+                        f"📅 Next high-impact event: **{_next['Event']}** on {_next['Date']} ({_when})"
+                        + (f" — {_next['Notes']}" if _next.get("Notes") else "")
+                    )
+        except Exception:
+            pass
+
+        # --- Since last visit (session snapshot) ---
+        try:
+            _snap_prices = {}
+            if brief_data:
+                for _t, _df in brief_data.items():
+                    if _df is not None and not _df.empty and "close" in _df.columns:
+                        _snap_prices[_t] = float(_df["close"].iloc[-1])
+            # also board majors if present later — update again after board load
+            if _snap_prices:
+                _diffs = update_and_diff_last_visit(_snap_prices)
+                if _diffs:
+                    _ago = st.session_state.get("_last_visit_ago", "")
+                    st.info("Since last visit" + str(_ago) + ": " + " · ".join(_diffs))
+        except Exception:
+            pass
 
         # --- 1) Session checklist ---
         sess = get_us_session_label()
