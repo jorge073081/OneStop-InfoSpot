@@ -1626,10 +1626,12 @@ def get_market_news(cache_buster: str = "", max_items: int = 40) -> List[Dict]:
         ("Fed", "Fed Speeches", "https://www.federalreserve.gov/feeds/speeches.xml"),
         # SEC / regulation
         ("SEC", "SEC Press", "https://www.sec.gov/news/pressreleases.rss"),
-        # Stocks / macro
+        # Stocks / equities
         ("Stocks", "Yahoo Finance", "https://finance.yahoo.com/news/rssindex"),
         ("Stocks", "CNBC Top News", "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114"),
+        ("Stocks", "CNBC Markets", "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910258"),
         ("Stocks", "MarketWatch", "https://feeds.marketwatch.com/marketwatch/topstories/"),
+        ("Stocks", "MarketWatch Markets", "https://feeds.marketwatch.com/marketwatch/marketpulse/"),
         # Crypto
         ("Crypto", "CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
         ("Crypto", "CoinTelegraph", "https://cointelegraph.com/rss"),
@@ -2609,7 +2611,7 @@ _view_map = {
     "crypto": "⚡ Crypto",
     "macro": "🌐 Macro/FRED",
     "fred": "🌐 Macro/FRED",
-    "news": "📰 LiveMacro/CryptoNews",
+    "news": "📰 LiveMacro/Crypto/StockNews",
     "predictive": "🔮 Predictive",
     "tools": "🛠️ Tools",
 }
@@ -2622,7 +2624,7 @@ except Exception:
 
 nav = st.radio(
     "Navigate",
-    ["☀️ Briefing", "📈 Chart", "🔀 Compare/Analysis", "⚡ Crypto", "🌐 Macro/FRED", "📰 LiveMacro/CryptoNews", "🔮 Predictive", "🛠️ Tools"],
+    ["☀️ Briefing", "📈 Chart", "🔀 Compare/Analysis", "⚡ Crypto", "🌐 Macro/FRED", "📰 LiveMacro/Crypto/StockNews", "🔮 Predictive", "🛠️ Tools"],
     horizontal=True,
     label_visibility="collapsed",
     key="main_nav",
@@ -3138,7 +3140,7 @@ if nav == "📈 Chart":
 
 if nav == "⚡ Crypto":
     st.subheader("⚡ Crypto")
-    st.caption("Positioning, pivots, liquidity, on-chain & DeFi. Candles under **Chart** · News under **LiveMacro/CryptoNews**.")
+    st.caption("Positioning, pivots, liquidity, on-chain & DeFi. Candles under **Chart** · News under **LiveMacro/Crypto/StockNews**.")
     if not tkrs:
         st.info("Enter at least one ticker in the sidebar.")
     else:
@@ -3407,8 +3409,8 @@ if nav == "🌐 Macro/FRED":
                         st.plotly_chart(fig_f, use_container_width=True)
 
 
-if nav == "📰 LiveMacro/CryptoNews":
-    st.subheader("📰 Live Macro / Crypto News")
+if nav == "📰 LiveMacro/Crypto/StockNews":
+    st.subheader("📰 Live Macro / Crypto / Stock News")
     st.caption("Fed · SEC · Stocks · Crypto headlines with sentiment. Briefing headlines are unchanged.")
 
     fng_v, fng_c = get_fear_greed()
@@ -3470,17 +3472,27 @@ if nav == "📰 LiveMacro/CryptoNews":
                     unsafe_allow_html=True,
                 )
 
-    tab_macro, tab_crypto, tab_all = st.tabs(["Macro / Policy", "Crypto", "All mixed"])
+    tab_macro, tab_stocks, tab_crypto, tab_all = st.tabs(
+        ["Macro / Policy", "Stocks", "Crypto", "All mixed"]
+    )
 
     with tab_macro:
-        st.markdown("##### Fed · SEC · Stocks")
-        macro_items = [a for a in (all_news or []) if a.get("category") in ("Fed", "SEC", "Stocks")]
+        st.markdown("##### Fed · SEC")
+        macro_items = [a for a in (all_news or []) if a.get("category") in ("Fed", "SEC")]
         _render_article_list(macro_items, "No macro/policy headlines right now.")
+
+    with tab_stocks:
+        st.markdown("##### Live stock market news")
+        st.caption("Yahoo · CNBC · MarketWatch")
+        stock_items = [a for a in (all_news or []) if a.get("category") == "Stocks"]
+        _render_article_list(stock_items, "No stock market headlines right now.")
 
     with tab_crypto:
         st.markdown("##### Crypto desk feed")
-        _render_article_list(crypto_only or [a for a in (all_news or []) if a.get("category") == "Crypto"],
-                             "No crypto headlines right now.")
+        _render_article_list(
+            crypto_only or [a for a in (all_news or []) if a.get("category") == "Crypto"],
+            "No crypto headlines right now.",
+        )
 
     with tab_all:
         st.markdown("##### Combined feed")
