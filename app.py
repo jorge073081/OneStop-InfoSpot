@@ -2129,6 +2129,7 @@ def build_asset_chart(
     show_vs_btc: bool,
     btc_data: Optional[pd.DataFrame] = None,
     patterns: Optional[List[Dict]] = None,
+    revision_key: str = "asset-chart",
 ) -> go.Figure:
     h_data = h_data.copy()
     # --- Chart cutoff fixes ---
@@ -2340,7 +2341,7 @@ def build_asset_chart(
         # Drawing tools (trend lines, zones, freehand) — used with Plotly modebar
         dragmode="zoom",
         # Keep zoom/pan/drawn shapes when data refreshes
-        uirevision="asset-analysis-chart",
+        uirevision=revision_key,
         newshape=dict(
             line=dict(color="#00FFFF", width=2),
             fillcolor="rgba(0, 255, 255, 0.12)",
@@ -2358,15 +2359,17 @@ def build_asset_chart(
             ticktext.append(pd.Timestamp(time_index[i]).strftime("%m/%d %H:%M"))
         except Exception:
             ticktext.append(str(time_index[i])[:16])
+    # IMPORTANT: do not force xaxis.range on every rebuild — that resets pan/zoom.
+    # uirevision keeps the user's view; only set ticks + disable rangeslider.
     for i in range(1, rows + 1):
         fig.update_xaxes(
             rangeslider_visible=False,
-            range=[-0.5, max(n - 0.5, 0.5)],
             tickvals=tickvals,
             ticktext=ticktext,
-            autorange=False,
+            uirevision=revision_key,
             row=i, col=1,
         )
+        fig.update_yaxes(uirevision=revision_key, row=i, col=1)
     return fig
 
 # ============================================================
@@ -3018,6 +3021,7 @@ if nav == "⚡ Crypto":
                     show_vs_btc=show_vs_btc,
                     btc_data=btc_data,
                     patterns=detected_patterns if show_patterns else None,
+                    revision_key=f"asset-view-{m_tgt}",
                 )
                 if show_long_baseline and "long_baseline" in h_data.columns:
                     fig.add_trace(
@@ -3379,59 +3383,59 @@ if nav == "🔮 Predictive":
                     )
                 
                 with score_col2:
-                    st.metric("Current Price", f"${prediction['current_price']:,.2f}")
-                    st.metric("Recent Volatility", f"{prediction['recent_volatility_pct']:.2f}%")
-                
-                with score_col3:
-                    st.metric("Projected Upside", f"${prediction['projected_upside']:,.2f}")
-                    st.metric("Projected Downside", f"${prediction['projected_downside']:,.2f}")
-                
-                st.markdown("---")
-                
-                st.markdown("### Factor Breakdown")
-                
-                comp_cols = st.columns(4)
-                component_names = ["Technical", "Positioning", "Sentiment", "Macro"]
-                component_icons = ["📈", "⚖️", "📰", "🌐"]
-                
-                for i, name in enumerate(component_names):
-                    comp = prediction["components"][name]
-                    with comp_cols[i]:
-                        color = "#00FF7F" if comp["score"] > 10 else "#FF4500" if comp["score"] < -10 else "#00FFFF"
-                        st.markdown(
-                            f"""
-                            <div style="background:#1a1d24; border-radius:8px; padding:14px; text-align:center; border:1px solid #3b4252;">
-                                <div style="font-size:1.5rem;">{component_icons[i]}</div>
-                                <div style="font-size:0.85rem; color:#a0a0a0;">{name}</div>
-                                <div style="font-size:1.8rem; font-weight:700; color:{color};">{comp['score']:+.1f}</div>
-                            </div>
-                            """,
-                            unsafe_allow_html=True,
+                            st.metric("Current Price", f"${prediction['current_price']:,.2f}")
+                        st.metric("Recent Volatility", f"{prediction['recent_volatility_pct']:.2f}%")
+    
+                    with score_col3:
+                        st.metric("Projected Upside", f"${prediction['projected_upside']:,.2f}")
+                        st.metric("Projected Downside", f"${prediction['projected_downside']:,.2f}")
+    
+                    st.markdown("---")
+    
+                    st.markdown("### Factor Breakdown")
+    
+                    comp_cols = st.columns(4)
+                    component_names = ["Technical", "Positioning", "Sentiment", "Macro"]
+                    component_icons = ["📈", "⚖️", "📰", "🌐"]
+    
+                    for i, name in enumerate(component_names):
+                        comp = prediction["components"][name]
+                        with comp_cols[i]:
+                            color = "#00FF7F" if comp["score"] > 10 else "#FF4500" if comp["score"] < -10 else "#00FFFF"
+                            st.markdown(
+                                f"""
+                                <div style="background:#1a1d24; border-radius:8px; padding:14px; text-align:center; border:1px solid #3b4252;">
+                                    <div style="font-size:1.5rem;">{component_icons[i]}</div>
+                                    <div style="font-size:0.85rem; color:#a0a0a0;">{name}</div>
+                                    <div style="font-size:1.8rem; font-weight:700; color:{color};">{comp['score']:+.1f}</div>
+                                </div>
+                                """,
+                                unsafe_allow_html=True,
+                            )
+    
+                    st.markdown("#### Detailed Signal Contributions")
+                    detail_rows = []
+                    for name in component_names:
+                        for k, v in prediction["components"][name]["details"].items():
+                            detail_rows.append({
+                                "Factor Group": name,
+                                "Signal": k,
+                                "Contribution": f"{v:+.1f}"
+                            })
+    
+                    if detail_rows:
+                        st.dataframe(
+                            pd.DataFrame(detail_rows),
+                            use_container_width=True,
+                            hide_index=True,
                         )
-                
-                st.markdown("#### Detailed Signal Contributions")
-                detail_rows = []
-                for name in component_names:
-                    for k, v in prediction["components"][name]["details"].items():
-                        detail_rows.append({
-                            "Factor Group": name,
-                            "Signal": k,
-                            "Contribution": f"{v:+.1f}"
-                        })
-                
-                if detail_rows:
-                    st.dataframe(
-                        pd.DataFrame(detail_rows),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-                
-                st.markdown("### Score Visualization")
-                fig_score = go.Figure()
-                
-                fig_score.add_trace(go.Bar(
-                    x=["Technical", "Positioning", "Sentiment", "Macro", "OVERALL"],
-                    y=[
+    
+                    st.markdown("### Score Visualization")
+                    fig_score = go.Figure()
+    
+                    fig_score.add_trace(go.Bar(
+                        x=["Technical", "Positioning", "Sentiment", "Macro", "OVERALL"],
+                        y=[
                         prediction["components"]["Technical"]["score"],
                         prediction["components"]["Positioning"]["score"],
                         prediction["components"]["Sentiment"]["score"],
