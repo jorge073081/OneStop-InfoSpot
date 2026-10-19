@@ -2441,7 +2441,13 @@ res_disp = st.sidebar.selectbox("Resolution", list(RESOLUTION_MAP.keys()))
 # Fixed refresh for live prices / candles / macro. Heavy blocks use longer cache TTLs (~3 min).
 FIXED_REFRESH_SEC = 45
 rf_rate = FIXED_REFRESH_SEC
-st.sidebar.caption("Live data refreshes ~45s · news/screener cached ~3 min")
+st.sidebar.caption("Live data ~45s · Chart tab has Analyze/Live modes")
+chart_mode = st.sidebar.radio(
+    "Chart mode",
+    ["Analyze (pan/zoom stays)", "Live (auto candles)"],
+    index=0,
+    help="Analyze pauses auto-refresh on the Chart tab so your view stays put. Live updates candles ~45s but may reset pan/zoom.",
+)
 
 st.sidebar.subheader("Charts")
 show_candles = st.sidebar.checkbox("Candlesticks", value=True)
@@ -2498,7 +2504,6 @@ interval = res_cfg["interval"]
 lookback_bars = res_cfg["lookback"]
 period = res_cfg["period"]
 is_6h = res_cfg["is_6h"]
-st_autorefresh(interval=rf_rate * 1000, key="datarefresh")
 
 # ============================================================
 # 7. MAIN LAYOUT
@@ -2514,6 +2519,7 @@ st.caption("Dark mode • Candlesticks • Pattern Recognition • Long/Short Al
 # Optional deep-link: ?view=briefing|crypto|compare|macro|screener
 _view_map = {
     "briefing": "☀️ Briefing",
+    "chart": "📈 Chart",
     "crypto": "⚡ Crypto",
     "compare": "🔀 Compare",
     "macro": "🌐 Macro",
@@ -2531,11 +2537,17 @@ except Exception:
 
 nav = st.radio(
     "Navigate",
-    ["☀️ Briefing", "⚡ Crypto", "🔀 Compare", "🌐 Macro", "🔮 Predictive", "📊 Analysis", "🔎 Screener", "🛠️ Tools"],
+    ["☀️ Briefing", "📈 Chart", "⚡ Crypto", "🔀 Compare", "🌐 Macro", "🔮 Predictive", "📊 Analysis", "🔎 Screener", "🛠️ Tools"],
     horizontal=True,
     label_visibility="collapsed",
     key="main_nav",
 )
+
+# Pause auto-refresh only in Chart + Analyze mode (keeps pan/zoom)
+# Live mode on Chart (and all other tabs) still auto-refresh ~45s
+_pause_refresh = (nav == "📈 Chart" and str(chart_mode).startswith("Analyze"))
+if not _pause_refresh:
+    st_autorefresh(interval=rf_rate * 1000, key="datarefresh")
 
 
 
@@ -2899,7 +2911,149 @@ if nav == "🔀 Compare":
                     st.caption("Need ≥2 tickers with overlapping history.")
 
 
+
+if nav == "📈 Chart":
+    st.subheader("📈 Chart workspace")
+    mode = str(chart_mode) if "chart_mode" in dir() or "chart_mode" in locals() else "Analyze (pan/zoom stays)"
+    if mode.startswith("Analyze"):
+        st.caption("**Analyze mode** — auto-refresh paused. Pan/zoom/drawings stay put. Click refresh for new candles.")
+        b1, b2 = st.columns([1, 4])
+        with b1:
+            if st.button("Refresh candles", key="chart_manual_refresh"):
+                try:
+                    get_shared_market_data.clear()
+                except Exception:
+                    pass
+                st.rerun()
+        with b2:
+            st.caption("Switch to **Live** in the sidebar for ~45s candle updates (may reset pan/zoom).")
+    else:
+        st.caption("**Live mode** — candles refresh ~45s. Pan/zoom may reset on each update (Streamlit limitation). Use Analyze mode to study a level.")
+
+    if not tkrs:
+        st.info("Enter at least one ticker in the sidebar.")
+    else:
+        data = get_shared_market_data(tkrs, interval, lookback_bars, period, is_6h)
+        if not data:
+            st.error("No valid data loaded. Check tickers or resolution.")
+        else:
+            btc_data = None
+            if show_vs_btc:
+                if "BTC-USD" in data:
+                    btc_data = data["BTC-USD"]
+                else:
+                    try:
+                        btc_raw = load_ticker_data(("BTC-USD",), interval, lookback_bars, period, is_6h)
+                        btc_data = btc_raw.get("BTC-USD")
+                    except Exception:
+                        pass
+
+            asset_options = list(data.keys())
+            if asset_options:
+                if "target_asset_select" not in st.session_state or st.session_state.target_asset_select not in asset_options:
+                    st.session_state.target_asset_select = asset_options[0]
+            m_tgt = st.selectbox(
+                "Select Target Asset:",
+                asset_options,
+                key="target_asset_select",
+            )
+            if m_tgt and m_tgt in data:
+                h_data = data[m_tgt].copy()
+                if show_long_baseline:
+                    long_avg = get_long_term_avg(m_tgt)
+                    if long_avg is not None:
+                        h_data["long_baseline"] = long_avg
+
+                detected_patterns = []
+                if show_patterns:
+                    detected_patterns = detect_all_patterns(h_data)
+
+                fig = build_asset_chart(
+                    h_data=h_data,
+                    show_candles=show_candles,
+                    show_sma50=show_sma50,
+                    show_sma200=show_sma200,
+                    show_bb=show_bb,
+                    show_rsi=show_rsi,
+                    show_macd=show_macd,
+                    show_stoch=show_stoch,
+                    show_atr=show_atr,
+                    show_vol_profile=show_vol_profile,
+                    show_baseline=show_baseline,
+                    show_long_baseline=show_long_baseline,
+                    show_vwap=show_vwap,
+                    show_vs_btc=show_vs_btc,
+                    btc_data=btc_data,
+                    patterns=detected_patterns if show_patterns else None,
+                    revision_key=f"asset-view-{m_tgt}",
+                )
+                if show_long_baseline and "long_baseline" in h_data.columns:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=list(range(len(h_data))),
+                            y=h_data["long_baseline"],
+                            name="1Y Baseline",
+                            line=dict(color="#FF8C00", width=1.8, dash="dashdot"),
+                        ),
+                        row=1, col=1,
+                    )
+                last_px = float(h_data["close"].iloc[-1]) if "close" in h_data.columns else None
+                if last_px is not None:
+                    st.metric(f"{m_tgt} last", format_price(last_px))
+
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True,
+                    config={
+                        "displaylogo": False,
+                        "scrollZoom": True,
+                        "editable": True,
+                        "edits": {"shapePosition": True, "annotationPosition": True},
+                        "modeBarButtonsToAdd": [
+                            "drawline",
+                            "drawopenpath",
+                            "drawcircle",
+                            "drawrect",
+                            "eraseshape",
+                        ],
+                        "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+                    },
+                    key=f"asset_chart_draw_{m_tgt}",
+                )
+
+                if show_vol_profile:
+                    vp_fig = build_volume_by_price_chart(h_data)
+                    if vp_fig is not None:
+                        st.plotly_chart(vp_fig, use_container_width=True)
+
+                if show_patterns:
+                    if detected_patterns:
+                        st.markdown("#### 🔎 Detected Chart Patterns")
+                        pattern_df = pd.DataFrame([
+                            {
+                                "Pattern": p["type"],
+                                "Direction": p["direction"],
+                                "Confidence": p["confidence"],
+                                "Price": format_price(p["price"]),
+                                "Description": p["description"],
+                            }
+                            for p in detected_patterns
+                        ])
+                        st.dataframe(pattern_df, use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("No patterns detected on this window.")
+
+                # Quick indicator snapshot
+                cols = st.columns(5)
+                if "rsi" in h_data.columns:
+                    cols[0].metric("RSI", f"{h_data['rsi'].iloc[-1]:.1f}" if pd.notna(h_data['rsi'].iloc[-1]) else "—")
+                if "macd" in h_data.columns:
+                    cols[1].metric("MACD", f"{h_data['macd'].iloc[-1]:.4f}" if pd.notna(h_data['macd'].iloc[-1]) else "—")
+
+
 if nav == "⚡ Crypto":
+    st.subheader("⚡ Crypto desk")
+    st.caption("Positioning, pivots, liquidity, and news. Full candlestick workspace is under **Chart**.")
     if not tkrs:
         st.info("Enter at least one ticker in the sidebar.")
     else:
@@ -2981,138 +3135,8 @@ if nav == "⚡ Crypto":
                                   font=dict(family="IBM Plex Sans, sans-serif"))
                 st.plotly_chart(fig, use_container_width=True)
             
-            st.subheader("🔥 Asset Analysis Frameworks")
-            asset_options = list(liquidity_profiles.keys()) if liquidity_profiles else list(data.keys())
-            # Persist selection across auto-refresh (widget key + validate against current options)
-            if asset_options:
-                if "target_asset_select" not in st.session_state or st.session_state.target_asset_select not in asset_options:
-                    st.session_state.target_asset_select = asset_options[0]
-            m_tgt = st.selectbox(
-                "Select Target Asset:",
-                asset_options,
-                key="target_asset_select",
-            )
-            if m_tgt and m_tgt in data:
-                h_data = data[m_tgt].copy()
-                if show_long_baseline:
-                    long_avg = get_long_term_avg(m_tgt)
-                    if long_avg is not None:
-                        h_data["long_baseline"] = long_avg
-                
-                # --- PATTERN DETECTION ---
-                detected_patterns = []
-                if show_patterns:
-                    detected_patterns = detect_all_patterns(h_data)
-                
-                fig = build_asset_chart(
-                    h_data=h_data,
-                    show_candles=show_candles,
-                    show_sma50=show_sma50,
-                    show_sma200=show_sma200,
-                    show_bb=show_bb,
-                    show_rsi=show_rsi,
-                    show_macd=show_macd,
-                    show_stoch=show_stoch,
-                    show_atr=show_atr,
-                    show_vol_profile=show_vol_profile,
-                    show_baseline=show_baseline,
-                    show_long_baseline=show_long_baseline,
-                    show_vwap=show_vwap,
-                    show_vs_btc=show_vs_btc,
-                    btc_data=btc_data,
-                    patterns=detected_patterns if show_patterns else None,
-                    revision_key=f"asset-view-{m_tgt}",
-                )
-                if show_long_baseline and "long_baseline" in h_data.columns:
-                    fig.add_trace(
-                        go.Scatter(
-                            x=list(range(len(h_data))),
-                            y=h_data["long_baseline"],
-                            name="1Y Baseline",
-                            line=dict(color="#FF8C00", width=1.8, dash="dashdot"),
-                        ),
-                        row=1, col=1,
-                    )
-                st.caption(
-                    "✏️ **Draw tools** (chart toolbar): line · freehand · circle · rectangle · erase. "
-                    "Drawings stay while you stay on this ticker (chart UI state is preserved on data refresh). "
-                    "Switching ticker or a full browser reload clears them."
-                )
-                st.plotly_chart(
-                    fig,
-                    use_container_width=True,
-                    config={
-                        "displaylogo": False,
-                        "scrollZoom": True,
-                        "editable": True,
-                        "edits": {"shapePosition": True, "annotationPosition": True},
-                        "modeBarButtonsToAdd": [
-                            "drawline",
-                            "drawopenpath",
-                            "drawcircle",
-                            "drawrect",
-                            "eraseshape",
-                        ],
-                        "modeBarButtonsToRemove": ["lasso2d", "select2d"],
-                    },
-                    # Stable key per ticker — avoids remounting and wiping drawings
-                    key=f"asset_chart_draw_{m_tgt}",
-                )
-
-                # Volume-by-price profile (price on Y axis) — separate chart so axes stay correct
-                if show_vol_profile:
-                    vp_fig = build_volume_by_price_chart(h_data)
-                    if vp_fig is not None:
-                        st.plotly_chart(vp_fig, use_container_width=True)
-                
-                # --- PATTERN SUMMARY BOX ---
-                if show_patterns:
-                    if detected_patterns:
-                        st.markdown("#### 🔎 Detected Chart Patterns")
-                        pattern_df = pd.DataFrame([
-                            {
-                                "Pattern": p["type"],
-                                "Direction": p["direction"],
-                                "Confidence": p["confidence"],
-                                "Price": format_price(p["price"]),
-                                "Description": p["description"],
-                            }
-                            for p in detected_patterns
-                        ])
-                        st.dataframe(pattern_df, use_container_width=True, hide_index=True)
-                    else:
-                        st.info("No significant chart patterns detected in the current lookback window.")
-                
-                cols = st.columns(5)
-                if show_rsi and "rsi" in h_data.columns and not h_data["rsi"].isna().all():
-                    rsi_val = h_data["rsi"].iloc[-1]
-                    cols[0].metric("RSI", f"{rsi_val:.1f}",
-                                   "Overbought" if rsi_val > 70 else "Oversold" if rsi_val < 30 else "Neutral")
-                if show_macd and "macd" in h_data.columns:
-                    cols[1].metric("MACD", f"{h_data['macd'].iloc[-1]:.2f}")
-                if show_bb and "bb_upper" in h_data.columns:
-                    bb_range = h_data["bb_upper"].iloc[-1] - h_data["bb_lower"].iloc[-1]
-                    if bb_range > 0:
-                        bb_pos = (h_data["close"].iloc[-1] - h_data["bb_lower"].iloc[-1]) / bb_range
-                        cols[2].metric("%B (BB)", f"{bb_pos * 100:.1f}%")
-                if show_baseline:
-                    baseline = h_data["close"].mean()
-                    dist = ((h_data["close"].iloc[-1] / baseline) - 1) * 100
-                    cols[3].metric("vs Baseline", f"{dist:+.1f}%")
-                if show_vs_btc and "vs_btc" in h_data.columns:
-                    cols[4].metric("vs BTC", f"{h_data['vs_btc'].iloc[-1]:+.1f}%")
-                st.markdown("#### 🔥 Liquidity Map (Estimated Liquidation Levels)")
-                p = liquidity_profiles[m_tgt]
-                st.caption(f"Source: **{p['source']}** | Order book distribution values are calculated continuously")
-                levels = [p["25x_l"], p["50x_l"], p["100x_l"], p["price"], p["100x_s"], p["50x_s"], p["25x_s"]]
-                labels = ["25x Long Liq", "50x Long Liq", "100x Long Liq", "Current Price",
-                          "100x Short Liq", "50x Short Liq", "25x Short Liq"]
-                fig_map = go.Figure(go.Bar(x=labels, y=levels, text=[f"${v:,.2f}" for v in levels], textposition="auto",
-                                           marker=dict(color=levels, colorscale="Portland")))
-                fig_map.update_layout(height=340, template="plotly_dark",
-                                      paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
-                                      font=dict(family="IBM Plex Sans, sans-serif"))
-                st.plotly_chart(fig_map, use_container_width=True)
+            st.info("Candlestick workspace moved to the **📈 Chart** tab (Analyze mode keeps pan/zoom; Live mode auto-updates candles).")
+            
             st.subheader("📊 Real-Time Futures Metrics")
             st.caption("Long/Short Account Ratio • Open Interest • Funding Rate  —  Source: OKX")
             if futures_table_rows:
