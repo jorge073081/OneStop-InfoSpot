@@ -2540,12 +2540,11 @@ _view_map = {
     "briefing": "☀️ Briefing",
     "chart": "📈 Chart",
     "crypto": "🌐 Crypto/Macro",
-    "compare": "🔀 Compare",
+    "compare": "🔀 Compare/Analysis",
+    "analysis": "🔀 Compare/Analysis",
     "macro": "🌐 Crypto/Macro",
     "news": "📰 LiveMacro/CryptoNews",
     "predictive": "🔮 Predictive",
-    "analysis": "📊 Analysis",
-    "screener": "🔎 Screener",
     "tools": "🛠️ Tools",
 }
 try:
@@ -2557,7 +2556,7 @@ except Exception:
 
 nav = st.radio(
     "Navigate",
-    ["☀️ Briefing", "📈 Chart", "🔀 Compare", "🌐 Crypto/Macro", "📰 LiveMacro/CryptoNews", "🔮 Predictive", "📊 Analysis", "🔎 Screener", "🛠️ Tools"],
+    ["☀️ Briefing", "📈 Chart", "🔀 Compare/Analysis", "🌐 Crypto/Macro", "📰 LiveMacro/CryptoNews", "🔮 Predictive", "🛠️ Tools"],
     horizontal=True,
     label_visibility="collapsed",
     key="main_nav",
@@ -2851,12 +2850,12 @@ if nav == "☀️ Briefing":
                             st.caption(f"52W: {snap['52W Range']}")
                         st.caption(snap.get("As Of") or "")
 
-        st.caption("Next: **Crypto/Macro** for charts · **Compare** for relative strength · **Macro** for yields & FRED · **Screener** for leaders")
+        st.caption("Next: **Chart** for candles · **Compare/Analysis** for relative strength · **Crypto/Macro** for positioning & yields")
 
 
-if nav == "🔀 Compare":
-    st.subheader("🔀 Compare Assets")
-    st.caption("Head-to-head returns, volatility, and relative performance for your loaded tickers.")
+if nav == "🔀 Compare/Analysis":
+    st.subheader("🔀 Compare / Analysis")
+    st.caption("Returns, volatility, correlation, and relative performance for your loaded tickers.")
 
     if not tkrs or len(tkrs) < 1:
         st.info("Load 2+ tickers in the sidebar for the best comparison.")
@@ -3073,7 +3072,7 @@ if nav == "📈 Chart":
 
 if nav == "🌐 Crypto/Macro":
     st.subheader("🌐 Crypto / Macro")
-    st.caption("Crypto positioning, pivots, liquidity & news · broad market macro · DeFi. Charts live under **Chart**.")
+    st.caption("Crypto positioning, pivots, liquidity · broad market macro · DeFi. Charts under **Chart** · News under **LiveMacro/CryptoNews**.")
     if not tkrs:
         st.info("Enter at least one ticker in the sidebar.")
     else:
@@ -3568,221 +3567,6 @@ if nav == "🔮 Predictive":
 # ============================================================
 # ANALYSIS TOOLS TAB
 # ============================================================
-if nav == "📊 Analysis":
-    st.subheader("📊 Advanced Analysis Tools")
-    st.caption("Correlation • Volatility • Multi-period Performance — all derived from the currently loaded tickers.")
-
-    if not tkrs:
-        st.info("Enter at least one ticker in the sidebar to use the analysis tools.")
-    else:
-        analysis_data = load_ticker_data(tuple(tkrs), interval, lookback_bars, period, is_6h)
-
-        if not analysis_data or len(analysis_data) == 0:
-            st.warning("No valid data available for analysis. Try different tickers or a different resolution.")
-        else:
-            # ----- 1. Multi-Period Performance -----
-            st.markdown("### 📈 Multi-Period Performance")
-            perf_df = compute_multi_period_performance(analysis_data)
-            if not perf_df.empty:
-                # Format percentages
-                display_perf = perf_df.copy()
-                for col in ["1D %", "7D %", "30D %", "90D %", "YTD %"]:
-                    if col in display_perf.columns:
-                        display_perf[col] = display_perf[col].apply(lambda x: f"{x:+.2f}%" if pd.notna(x) else "N/A")
-                st.dataframe(display_perf.set_index("Ticker"), use_container_width=True)
-            else:
-                st.info("Not enough history to compute performance.")
-
-            st.markdown("---")
-
-            # ----- 2. Volatility Dashboard -----
-            st.markdown("### 📉 Volatility Dashboard")
-            vol_df = compute_volatility_stats(analysis_data)
-            if not vol_df.empty:
-                display_vol = vol_df.copy()
-                display_vol["Price"] = display_vol["Price"].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "N/A")
-                display_vol["Vol 7d (ann%)"] = display_vol["Vol 7d (ann%)"].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A")
-                display_vol["Vol 30d (ann%)"] = display_vol["Vol 30d (ann%)"].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A")
-                display_vol["ATR"] = display_vol["ATR"].apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "N/A")
-                display_vol["ATR %"] = display_vol["ATR %"].apply(lambda x: f"{x:.2f}%" if pd.notna(x) else "N/A")
-                st.dataframe(display_vol.set_index("Ticker"), use_container_width=True)
-
-                # Simple bar chart of 30d volatility
-                try:
-                    fig_vol = go.Figure()
-                    fig_vol.add_trace(go.Bar(
-                        x=vol_df["Ticker"],
-                        y=vol_df["Vol 30d (ann%)"],
-                        marker_color="#00BFFF",
-                        text=vol_df["Vol 30d (ann%)"].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else ""),
-                        textposition="auto"
-                    ))
-                    fig_vol.update_layout(
-                        title="30-Day Annualized Volatility",
-                        height=320,
-                        template="plotly_dark",
-                        paper_bgcolor="#0e1117",
-                        plot_bgcolor="#0e1117",
-                        font=dict(family="IBM Plex Sans, sans-serif"),
-                        margin=dict(l=10, r=10, t=40, b=10),
-                        yaxis_title="Volatility %"
-                    )
-                    st.plotly_chart(fig_vol, use_container_width=True)
-                except Exception:
-                    pass
-            else:
-                st.info("Not enough data for volatility stats.")
-
-            st.markdown("---")
-
-            # ----- 3. Correlation Matrix -----
-            st.markdown("### 🔗 Correlation Matrix (Returns)")
-            st.caption("Based on daily (or current resolution) returns of the loaded tickers. Values near +1 move together; near -1 move inversely.")
-            corr = compute_correlation_matrix(analysis_data)
-            if not corr.empty and len(corr) >= 2:
-                try:
-                    fig_corr = go.Figure(data=go.Heatmap(
-                        z=corr.values,
-                        x=corr.columns.tolist(),
-                        y=corr.index.tolist(),
-                        colorscale="RdBu",
-                        zmid=0,
-                        text=np.round(corr.values, 2),
-                        texttemplate="%{text}",
-                        textfont={"size": 12},
-                        colorbar=dict(title="Corr")
-                    ))
-                    fig_corr.update_layout(
-                        height=420,
-                        template="plotly_dark",
-                        paper_bgcolor="#0e1117",
-                        plot_bgcolor="#0e1117",
-                        font=dict(family="IBM Plex Sans, sans-serif"),
-                        margin=dict(l=10, r=10, t=20, b=10),
-                    )
-                    st.plotly_chart(fig_corr, use_container_width=True)
-                except Exception as e:
-                    st.write(corr.round(2))
-            else:
-                st.info("Need at least 2 tickers with overlapping history to build a correlation matrix.")
-
-
-
-# ============================================================
-# BACKTEST & TOOLS TAB (Phase 4)
-# ============================================================
-
-if nav == "🔎 Screener":
-    st.subheader("🔎 Top Performers Screener")
-    st.caption(
-        "Liquid stocks + crypto ETFs only (timeout-safe). Sorted toward leaders — not the full market."
-    )
-
-    uni_mode = st.selectbox(
-        "Universe",
-        [
-            "Combined (Top stocks + Crypto ETFs)",
-            "Top stocks / ETFs",
-            "Crypto ETFs",
-        ],
-        index=0,
-    )
-    universe_list = build_screener_universe(uni_mode)
-    universe = tuple(universe_list)
-    with st.expander("Universe symbols", expanded=False):
-        st.write(", ".join(universe_list))
-        st.caption(f"{len(universe_list)} symbols · max 120 screened · 5 min cache")
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        min_1d = st.number_input("Min 1D %", value=-100.0, step=0.5)
-        max_1d = st.number_input("Max 1D %", value=100.0, step=0.5)
-    with c2:
-        min_rsi = st.slider("Min RSI", 0, 100, 0)
-        max_rsi = st.slider("Max RSI", 0, 100, 100)
-    with c3:
-        above_sma50 = st.selectbox("SMA50 filter", ["Any", "Above", "Below"])
-        above_sma200 = st.selectbox("SMA200 filter", ["Any", "Above", "Below"])
-    with c4:
-        min_rel_vol = st.number_input("Min relative volume", value=0.0, step=0.1)
-        sort_by = st.selectbox("Sort by", ["1D %", "5D %", "1M %", "RSI", "Rel Vol", "Price"], index=0)
-
-    preset = st.radio(
-        "Quick presets",
-        ["Custom", "Momentum (RSI 55–75, above SMA50)", "Oversold (RSI < 35)", "High volume (>1.5x)", "Leaders (1M > 5%)"],
-        horizontal=True,
-    )
-
-    raw = run_stock_screener(universe)
-    if raw is None or raw.empty:
-        st.warning("Screener data unavailable — try again in a minute.")
-    else:
-        df = raw.copy()
-        # Presets override some filters
-        if preset.startswith("Momentum"):
-            min_rsi, max_rsi = 55, 75
-            above_sma50 = "Above"
-        elif preset.startswith("Oversold"):
-            min_rsi, max_rsi = 0, 35
-        elif preset.startswith("High volume"):
-            min_rel_vol = 1.5
-        elif preset.startswith("Leaders"):
-            df = df[df["1M %"] > 5]
-
-        df = df[(df["1D %"] >= min_1d) & (df["1D %"] <= max_1d)]
-        df = df[(df["RSI"] >= min_rsi) & (df["RSI"] <= max_rsi)]
-        if above_sma50 == "Above":
-            df = df[df["Above SMA50"] == True]
-        elif above_sma50 == "Below":
-            df = df[df["Above SMA50"] == False]
-        if above_sma200 == "Above":
-            df = df[df["Above SMA200"] == True]
-        elif above_sma200 == "Below":
-            df = df[df["Above SMA200"] == False]
-        if min_rel_vol > 0:
-            df = df[df["Rel Vol"].fillna(0) >= min_rel_vol]
-
-        if sort_by in df.columns:
-            df = df.sort_values(sort_by, ascending=False)
-
-        st.metric("Matches", f"{len(df)} / {len(raw)}")
-        # Top performers strip
-        if not df.empty and "1D %" in df.columns:
-            leaders = df.nlargest(min(5, len(df)), "1D %")
-            laggards = df.nsmallest(min(5, len(df)), "1D %")
-            t1, t2 = st.columns(2)
-            with t1:
-                st.markdown("**Today’s leaders (1D)**")
-                for _, r in leaders.iterrows():
-                    st.markdown(f"- **{r['Symbol']}** {r['1D %']:+.2f}%")
-            with t2:
-                st.markdown("**Today’s laggards (1D)**")
-                for _, r in laggards.iterrows():
-                    st.markdown(f"- **{r['Symbol']}** {r['1D %']:+.2f}%")
-        if df.empty:
-            st.info("No symbols match these filters — loosen the criteria.")
-        else:
-            show = df.copy()
-            show["Price"] = show["Price"].map(lambda x: f"${x:,.2f}")
-            for col in ["1D %", "5D %", "1M %", "vs SMA50 %", "vs SMA200 %"]:
-                if col in show.columns:
-                    show[col] = show[col].map(lambda x: f"{x:+.2f}%" if pd.notna(x) else "—")
-            show["RSI"] = show["RSI"].map(lambda x: f"{x:.0f}" if pd.notna(x) else "—")
-            show["Rel Vol"] = show["Rel Vol"].map(lambda x: f"{x:.2f}x" if pd.notna(x) else "—")
-            drop_cols = [c for c in ["Above SMA50", "Above SMA200"] if c in show.columns]
-            show = show.drop(columns=drop_cols)
-            st.dataframe(show, use_container_width=True, hide_index=True)
-
-            # Send matches to chart tickers
-            if st.button("Use top matches as chart tickers (max 6)"):
-                top = df["Symbol"].head(6).tolist()
-                # Prefer -USD style only for crypto; these are stocks
-                st.session_state.main_tickers_value = ", ".join(top)
-                st.session_state.url_tickers_applied = True
-                st.success("Updated tickers — open **Crypto/Macro** or **Compare** to chart them.")
-                st.rerun()
-
-
 if nav == "🛠️ Tools":
     st.subheader("🛠️ Backtesting • Multi-Timeframe • Export")
     
