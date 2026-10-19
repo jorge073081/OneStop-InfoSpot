@@ -250,7 +250,28 @@ RESOLUTION_MAP = {
     "Monthly (15y)": {"interval": "1mo", "lookback": 180, "period": "15y", "is_6h": False},
 }
 
+def format_price(px) -> str:
+    """Adaptive price precision so XRP etc. are not rounded to 2 dp."""
+    try:
+        if px is None or (isinstance(px, float) and np.isnan(px)):
+            return "—"
+        px = float(px)
+    except (TypeError, ValueError):
+        return "—"
+    ax = abs(px)
+    if ax >= 1000:
+        return f"${px:,.2f}"
+    if ax >= 50:
+        return f"${px:,.2f}"
+    if ax >= 1:
+        return f"${px:,.4f}"
+    if ax >= 0.01:
+        return f"${px:,.5f}"
+    return f"${px:,.8f}"
+
+
 def safe_float(value, default=None) -> Optional[float]:
+
     try:
         if value is None:
             return default
@@ -564,7 +585,7 @@ def load_fred_dashboard(api_key: str) -> Dict[str, pd.DataFrame]:
 # SHARED / LAZY DATA LAYER (one fetch per ticker+resolution combo)
 # ============================================================
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=30, show_spinner=False)
 def load_live_board(symbols: Tuple[str, ...] = None) -> pd.DataFrame:
     """Quick last price + session change for a fixed board of stocks & crypto."""
     if symbols is None:
@@ -744,7 +765,7 @@ def build_screener_universe(mode: str) -> List[str]:
     return out
 
 
-@st.cache_data(ttl=300, show_spinner="Screening top names…")
+@st.cache_data(ttl=180, show_spinner="Screening top names…")
 def run_stock_screener(symbols: Tuple[str, ...]) -> pd.DataFrame:
     """Fetch daily metrics for a compact liquid list (parallel, capped)."""
     def _one(sym: str):
@@ -1342,7 +1363,7 @@ def _fetch_one_ticker(t: str, interval: str, lookback: int, period: str, is_6h: 
     return t, None
 
 
-@st.cache_data(ttl=45, show_spinner="Fetching market data (parallel)...")
+@st.cache_data(ttl=30, show_spinner="Fetching market data (parallel)...")
 def load_ticker_data(
     tickers: Tuple[str, ...],
     interval: str,
@@ -1519,7 +1540,7 @@ def filter_news_for_tickers(news: List[Dict], tickers: List[str]) -> List[Dict]:
     return hits
 
 
-@st.cache_data(ttl=900, show_spinner="Fetching market news…")
+@st.cache_data(ttl=180, show_spinner="Fetching market news…")
 def get_market_news(cache_buster: str = "", max_items: int = 40) -> List[Dict]:
     """
     Free multi-source news: Fed, SEC, Stocks/Macro, Crypto.
@@ -1660,7 +1681,7 @@ def get_real_onchain(ticker: str) -> Dict[str, Any]:
         pass
     return {"Note": f"No free on-chain data found for {t}", "Source": "Free endpoints only"}
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=30)
 def get_futures_metrics(ticker: str, current_price: float = 0.0) -> Dict[str, Any]:
     t = ticker.upper().replace("-USD", "").replace("USDT", "").replace("USD", "").strip()
     symbol_okx = f"{t}-USDT-SWAP"
@@ -1717,7 +1738,7 @@ def get_futures_metrics(ticker: str, current_price: float = 0.0) -> Dict[str, An
         result["source"] += " (L/S fallback)"
     return result
 
-@st.cache_data(ttl=900, show_spinner="Gathering cross-asset macro indicators...")
+@st.cache_data(ttl=45, show_spinner="Gathering cross-asset macro indicators...")
 def load_macro_data() -> Dict[str, pd.DataFrame]:
     """Expanded free macro set via Yahoo Finance (no API key)."""
     macro_tickers = {
@@ -1746,7 +1767,7 @@ def load_macro_data() -> Dict[str, pd.DataFrame]:
     return macro_results
 
 
-@st.cache_data(ttl=1800, show_spinner="Fetching DeFi / stablecoin landscape...")
+@st.cache_data(ttl=180, show_spinner="Fetching DeFi / stablecoin landscape...")
 def load_defi_overview() -> Dict[str, Any]:
     """Free DefiLlama aggregates: total TVL + stablecoin mcap snapshot."""
     out = {"total_tvl": None, "top_chains": [], "stablecoin_mcap": None, "error": None}
@@ -2318,6 +2339,8 @@ def build_asset_chart(
         font=dict(family="IBM Plex Sans, sans-serif"),
         # Drawing tools (trend lines, zones, freehand) — used with Plotly modebar
         dragmode="zoom",
+        # Keep zoom/pan/drawn shapes when data refreshes
+        uirevision="asset-analysis-chart",
         newshape=dict(
             line=dict(color="#00FFFF", width=2),
             fillcolor="rgba(0, 255, 255, 0.12)",
@@ -2412,10 +2435,10 @@ with st.sidebar.expander("🔗 Share this setup"):
         st.caption("Add tickers to generate a share link.")
 
 res_disp = st.sidebar.selectbox("Resolution", list(RESOLUTION_MAP.keys()))
-# Fixed refresh — users cannot change this (protects free APIs under traffic)
-FIXED_REFRESH_SEC = 180
+# Fixed refresh for live prices / candles / macro. Heavy blocks use longer cache TTLs (~3 min).
+FIXED_REFRESH_SEC = 45
 rf_rate = FIXED_REFRESH_SEC
-st.sidebar.caption("Auto-refresh every 3 minutes (fixed)")
+st.sidebar.caption("Live data refreshes ~45s · news/screener cached ~3 min")
 
 st.sidebar.subheader("Charts")
 show_candles = st.sidebar.checkbox("Candlesticks", value=True)
@@ -2609,17 +2632,14 @@ if nav == "☀️ Briefing":
                     st.markdown("**Stocks / ETFs**")
                     if not stocks.empty:
                         disp = stocks.copy()
-                        disp["Price"] = disp["Price"].map(lambda x: f"${x:,.2f}")
+                        disp["Price"] = disp["Price"].map(lambda x: format_price(x))
                         disp["Chg%"] = disp["Chg%"].map(lambda x: f"{x:+.2f}%")
                         st.dataframe(disp, use_container_width=True, hide_index=True)
                 with b2:
                     st.markdown("**Crypto**")
                     if not cryptos.empty:
                         disp = cryptos.copy()
-                        disp["Price"] = disp.apply(
-                            lambda r: f"${r['Price']:,.2f}" if r["Price"] >= 1 else f"${r['Price']:,.4f}",
-                            axis=1,
-                        )
+                        disp["Price"] = disp["Price"].map(lambda x: format_price(x))
                         disp["Chg%"] = disp["Chg%"].map(lambda x: f"{x:+.2f}%")
                         st.dataframe(disp, use_container_width=True, hide_index=True)
                     # Also surface user tickers live if different
@@ -2667,7 +2687,7 @@ if nav == "☀️ Briefing":
                 sec = load_sector_board()
                 if sec is not None and not sec.empty:
                     disp = sec.copy()
-                    disp["Price"] = disp["Price"].map(lambda x: f"${x:,.2f}")
+                    disp["Price"] = disp["Price"].map(lambda x: format_price(x))
                     disp["1D %"] = disp["1D %"].map(lambda x: f"{x:+.2f}%")
                     disp["1W %"] = disp["1W %"].map(lambda x: f"{x:+.2f}%")
                     st.dataframe(disp, use_container_width=True, hide_index=True)
@@ -2693,7 +2713,7 @@ if nav == "☀️ Briefing":
                     rsi = df["rsi"].iloc[-1] if "rsi" in df.columns else None
                     rows.append({
                         "Ticker": t.replace("-USD", ""),
-                        "Price": f"${px:,.2f}",
+                        "Price": format_price(px),
                         "Chg": f"{ch:+.2f}%",
                         "RSI": f"{float(rsi):.0f}" if rsi is not None and pd.notna(rsi) else "—",
                     })
@@ -2777,7 +2797,7 @@ if nav == "☀️ Briefing":
                             continue
                         st.markdown(f"**{snap.get('Name') or sym}** (`{sym}`)")
                         px = snap.get("Price")
-                        st.write(f"Price: **{px:,.2f}**" if isinstance(px, (int, float)) else f"Price: {px or '—'}")
+                        st.write(f"Price: **{format_price(px).lstrip('$')}**" if isinstance(px, (int, float)) else f"Price: {px or '—'}")
                         mcap = snap.get("Market Cap")
                         if isinstance(mcap, (int, float)) and mcap:
                             if mcap >= 1e12:
@@ -2936,14 +2956,14 @@ if nav == "⚡ Crypto":
                 if t in daily_pivots:
                     p = daily_pivots[t]
                     matrix_rows.append({
-                        "Ticker": t, "Price": f"${c_px:,.2f}", "Change": f"{delta:+.2f}%",
+                        "Ticker": t, "Price": format_price(c_px), "Change": f"{delta:+.2f}%",
                         "Long %": f"{long_r:.1f}%", "Short %": f"{short_r:.1f}%",
                         "Pivot": f"${p['Pivot']:,.2f}", "S1": f"${p['S1']:,.2f}", "S2": f"${p['S2']:,.2f}",
                         "R1": f"${p['R1']:,.2f}", "R2": f"${p['R2']:,.2f}",
                     })
                 else:
                     matrix_rows.append({
-                        "Ticker": t, "Price": f"${c_px:,.2f}", "Change": f"{delta:+.2f}%",
+                        "Ticker": t, "Price": format_price(c_px), "Change": f"{delta:+.2f}%",
                         "Long %": f"{long_r:.1f}%", "Short %": f"{short_r:.1f}%",
                         "Pivot": "N/A", "S1": "N/A", "S2": "N/A", "R1": "N/A", "R2": "N/A",
                     })
@@ -3011,7 +3031,8 @@ if nav == "⚡ Crypto":
                     )
                 st.caption(
                     "✏️ **Draw tools** (chart toolbar): line · freehand · circle · rectangle · erase. "
-                    "Use rectangle for zones, line for trendlines. Double‑click a shape to select · erase to remove."
+                    "Drawings stay while you stay on this ticker (chart UI state is preserved on data refresh). "
+                    "Switching ticker or a full browser reload clears them."
                 )
                 st.plotly_chart(
                     fig,
@@ -3019,6 +3040,8 @@ if nav == "⚡ Crypto":
                     config={
                         "displaylogo": False,
                         "scrollZoom": True,
+                        "editable": True,
+                        "edits": {"shapePosition": True, "annotationPosition": True},
                         "modeBarButtonsToAdd": [
                             "drawline",
                             "drawopenpath",
@@ -3028,7 +3051,8 @@ if nav == "⚡ Crypto":
                         ],
                         "modeBarButtonsToRemove": ["lasso2d", "select2d"],
                     },
-                    key=f"asset_chart_{m_tgt}",
+                    # Stable key per ticker — avoids remounting and wiping drawings
+                    key=f"asset_chart_draw_{m_tgt}",
                 )
 
                 # Volume-by-price profile (price on Y axis) — separate chart so axes stay correct
@@ -3046,7 +3070,7 @@ if nav == "⚡ Crypto":
                                 "Pattern": p["type"],
                                 "Direction": p["direction"],
                                 "Confidence": p["confidence"],
-                                "Price": f"${p['price']:,.2f}",
+                                "Price": format_price(p["price"]),
                                 "Description": p["description"],
                             }
                             for p in detected_patterns
