@@ -2539,10 +2539,11 @@ st.caption("Dark mode • Candlesticks • Pattern Recognition • Long/Short Al
 _view_map = {
     "briefing": "☀️ Briefing",
     "chart": "📈 Chart",
-    "crypto": "🌐 Crypto/Macro",
     "compare": "🔀 Compare/Analysis",
     "analysis": "🔀 Compare/Analysis",
-    "macro": "🌐 Crypto/Macro",
+    "crypto": "⚡ Crypto",
+    "macro": "🌐 Macro/FRED",
+    "fred": "🌐 Macro/FRED",
     "news": "📰 LiveMacro/CryptoNews",
     "predictive": "🔮 Predictive",
     "tools": "🛠️ Tools",
@@ -2556,7 +2557,7 @@ except Exception:
 
 nav = st.radio(
     "Navigate",
-    ["☀️ Briefing", "📈 Chart", "🔀 Compare/Analysis", "🌐 Crypto/Macro", "📰 LiveMacro/CryptoNews", "🔮 Predictive", "🛠️ Tools"],
+    ["☀️ Briefing", "📈 Chart", "🔀 Compare/Analysis", "⚡ Crypto", "🌐 Macro/FRED", "📰 LiveMacro/CryptoNews", "🔮 Predictive", "🛠️ Tools"],
     horizontal=True,
     label_visibility="collapsed",
     key="main_nav",
@@ -2670,7 +2671,7 @@ if nav == "☀️ Briefing":
                         disp["Chg%"] = disp["Chg%"].map(lambda x: f"{x:+.2f}%")
                         st.dataframe(disp, use_container_width=True, hide_index=True)
                 with b2:
-                    st.markdown("**Crypto/Macro**")
+                    st.markdown("**Crypto**")
                     if not cryptos.empty:
                         disp = cryptos.copy()
                         disp["Price"] = disp["Price"].map(lambda x: format_price(x))
@@ -2850,7 +2851,7 @@ if nav == "☀️ Briefing":
                             st.caption(f"52W: {snap['52W Range']}")
                         st.caption(snap.get("As Of") or "")
 
-        st.caption("Next: **Chart** for candles · **Compare/Analysis** for relative strength · **Crypto/Macro** for positioning & yields")
+        st.caption("Next: **Chart** for candles · **Compare/Analysis** for relative strength · **Crypto** for positioning & yields")
 
 
 if nav == "🔀 Compare/Analysis":
@@ -3070,9 +3071,9 @@ if nav == "📈 Chart":
                     cols[1].metric("MACD", f"{h_data['macd'].iloc[-1]:.4f}" if pd.notna(h_data['macd'].iloc[-1]) else "—")
 
 
-if nav == "🌐 Crypto/Macro":
-    st.subheader("🌐 Crypto / Macro")
-    st.caption("Crypto positioning, pivots, liquidity · broad market macro · DeFi. Charts under **Chart** · News under **LiveMacro/CryptoNews**.")
+if nav == "⚡ Crypto":
+    st.subheader("⚡ Crypto")
+    st.caption("Positioning, pivots, liquidity, on-chain & DeFi. Candles under **Chart** · News under **LiveMacro/CryptoNews**.")
     if not tkrs:
         st.info("Enter at least one ticker in the sidebar.")
     else:
@@ -3184,12 +3185,34 @@ if nav == "🌐 Crypto/Macro":
                 st.subheader("🧮 Side-by-Side Pivot Matrix (Daily Pivots)")
                 st.caption("Classic Floor Pivots calculated from the previous daily candle close parameters")
                 st.dataframe(pd.DataFrame(matrix_rows).set_index("Ticker"), use_container_width=True)
+
+    # DeFi (crypto liquidity layer)
+    defi = load_defi_overview()
+    # DeFi / Stablecoin layer
     st.markdown("---")
+    st.markdown("#### 🦄 DeFi & Stablecoin Landscape (DefiLlama)")
+    if defi.get("total_tvl"):
+        d1, d2 = st.columns(2)
+        d1.metric("Total Crypto TVL", f"${defi['total_tvl']:,.0f}")
+        if defi.get("stablecoin_mcap"):
+            d2.metric("Stablecoin Supply (approx)", f"${defi['stablecoin_mcap']:,.0f}")
+        if defi.get("top_chains"):
+            chain_df = pd.DataFrame(defi["top_chains"])
+            chain_df["tvl"] = chain_df["tvl"].apply(lambda x: f"${x:,.0f}" if x else "N/A")
+            st.dataframe(chain_df.rename(columns={"name": "Chain", "tvl": "TVL", "symbol": "Symbol"}),
+                         use_container_width=True, hide_index=True)
+    else:
+        st.caption("DefiLlama data temporarily unavailable.")
+
+
+if nav == "🌐 Macro/FRED":
+    st.subheader("🌐 Macro / FRED")
+    st.caption("Broad market telemetry · yields · commodities · official FRED series (CPI, Fed Funds, M2, unemployment).")
+
     st.subheader("Broad Market Telemetry")
-    st.caption("Equities • Yields • Commodities • Volatility • DeFi liquidity — free public feeds.")
+    st.caption("Equities • Yields • Commodities • Volatility — free public feeds.")
     
     macro_data = load_macro_data()
-    defi = load_defi_overview()
     
     if not macro_data:
         st.info("Macro data temporarily unavailable. Try refreshing shortly.")
@@ -3317,24 +3340,6 @@ if nav == "🌐 Crypto/Macro":
                             showlegend=False,
                         )
                         st.plotly_chart(fig_f, use_container_width=True)
-
-
-    # DeFi / Stablecoin layer
-    st.markdown("---")
-    st.markdown("#### 🦄 DeFi & Stablecoin Landscape (DefiLlama)")
-    if defi.get("total_tvl"):
-        d1, d2 = st.columns(2)
-        d1.metric("Total Crypto TVL", f"${defi['total_tvl']:,.0f}")
-        if defi.get("stablecoin_mcap"):
-            d2.metric("Stablecoin Supply (approx)", f"${defi['stablecoin_mcap']:,.0f}")
-        if defi.get("top_chains"):
-            chain_df = pd.DataFrame(defi["top_chains"])
-            chain_df["tvl"] = chain_df["tvl"].apply(lambda x: f"${x:,.0f}" if x else "N/A")
-            st.dataframe(chain_df.rename(columns={"name": "Chain", "tvl": "TVL", "symbol": "Symbol"}),
-                         use_container_width=True, hide_index=True)
-    else:
-        st.caption("DefiLlama data temporarily unavailable.")
-
 
 
 if nav == "📰 LiveMacro/CryptoNews":
