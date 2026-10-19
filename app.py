@@ -15,7 +15,6 @@ import uuid
 from typing import Dict, List, Optional, Tuple, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-
 # ============================================================
 # 1. INITIAL SETUP & MATRIX INTERFACE STYLE SYSTEM
 # ============================================================
@@ -241,14 +240,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-
-@st.cache_resource(show_spinner=False)
-def get_sia():
-    """Single shared VADER analyzer."""
-    try:
-        return SIA()
-    except Exception:
-        return None
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -668,7 +659,7 @@ def load_fred_dashboard(api_key: str) -> Dict[str, pd.DataFrame]:
 # SHARED / LAZY DATA LAYER (one fetch per ticker+resolution combo)
 # ============================================================
 
-@st.cache_data(ttl=45, show_spinner=False)
+@st.cache_data(ttl=30, show_spinner=False)
 def load_live_board(symbols: Tuple[str, ...] = None) -> pd.DataFrame:
     """Quick last price + session change for a fixed board of stocks & crypto."""
     if symbols is None:
@@ -706,47 +697,6 @@ def load_live_board(symbols: Tuple[str, ...] = None) -> pd.DataFrame:
     df = df.sort_values("_ord").drop(columns=["_ord"])
     return df
 
-
-
-
-def update_and_diff_last_visit(prices: Dict[str, float], min_age_sec: int = 120) -> List[str]:
-    """Compare current prices to last snapshot; only refresh baseline after min_age (survives auto-refresh)."""
-    if not prices:
-        return []
-    prev = st.session_state.get("_last_visit_prices") or {}
-    prev_ts = st.session_state.get("_last_visit_ts")
-    lines = []
-    now = time.time()
-    age = (now - float(prev_ts)) if prev_ts else None
-    if prev and isinstance(prev, dict) and age is not None and age >= min_age_sec:
-        if age < 3600:
-            ago = f" · {int(age // 60)}m ago"
-        else:
-            ago = f" · {int(age // 3600)}h ago"
-        for sym, px in prices.items():
-            try:
-                px = float(px)
-                old = prev.get(sym)
-                if old is None:
-                    continue
-                old = float(old)
-                if old <= 0:
-                    continue
-                ch = (px / old - 1) * 100
-                if abs(ch) < 0.05:
-                    lines.append(f"{sym.replace('-USD', '')} flat")
-                else:
-                    lines.append(f"{sym.replace('-USD', '')} {ch:+.2f}%")
-            except Exception:
-                continue
-        st.session_state["_last_visit_ago"] = ago
-    # Establish or roll baseline: first time, or after 15 minutes
-    if not prev or age is None or age >= 900:
-        st.session_state["_last_visit_prices"] = {
-            k: float(v) for k, v in prices.items() if v is not None
-        }
-        st.session_state["_last_visit_ts"] = now
-    return lines[:8]
 
 
 def get_us_session_label(now_utc: Optional[pd.Timestamp] = None) -> Dict[str, str]:
@@ -861,7 +811,7 @@ def compute_risk_score(macro_snap: Dict, fng_v, btc_chg: Optional[float] = None,
     return {"score": score, "label": label, "color": color, "details": details}
 
 
-@st.cache_data(ttl=180, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)
 def load_gap_and_levels(symbols: Tuple[str, ...]) -> pd.DataFrame:
     """Daily gaps + basic levels for a small symbol list (Yahoo)."""
     rows = []
@@ -1137,7 +1087,7 @@ def get_shared_market_data(tickers, interval, lookback, period, is_6h):
     # Soft TTL using timestamp
     now = time.time()
     entry = cache.get(key)
-    if entry and (now - entry.get("ts", 0)) < 60:
+    if entry and (now - entry.get("ts", 0)) < 45:
         return entry["data"]
     data = load_ticker_data(tuple(tickers), interval, lookback, period, is_6h) if tickers else {}
     cache[key] = {"ts": now, "data": data}
@@ -1667,7 +1617,7 @@ def _fetch_one_ticker(t: str, interval: str, lookback: int, period: str, is_6h: 
     return t, None
 
 
-@st.cache_data(ttl=45, show_spinner="Fetching market data (parallel)...")
+@st.cache_data(ttl=30, show_spinner="Fetching market data (parallel)...")
 def load_ticker_data(
     tickers: Tuple[str, ...],
     interval: str,
@@ -1680,7 +1630,7 @@ def load_ticker_data(
     if not tickers:
         return results
     # Cap workers to avoid hammering Yahoo
-    workers = min(6, max(1, len(tickers)))
+    workers = min(8, max(1, len(tickers)))
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = {
             ex.submit(_fetch_one_ticker, t, interval, lookback, period, is_6h): t
@@ -1729,7 +1679,7 @@ def get_daily_pivots(tickers: Tuple[str, ...]) -> Dict[str, Dict[str, float]]:
             continue
     return pivots
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=300)
 def get_fear_greed() -> Tuple[str, str]:
     try:
         res = requests.get("https://api.alternative.me/fng/", headers=HEADERS, timeout=8).json()
@@ -1739,6 +1689,8 @@ def get_fear_greed() -> Tuple[str, str]:
         return "N/A", "Unavailable"
     except Exception:
         return "N/A", "Unavailable"
+
+@st.cache_data(ttl=90, show_spinner="Fetching fresh crypto news...")
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_equity_snapshot(symbol: str) -> Dict[str, Any]:
@@ -2042,7 +1994,7 @@ def get_futures_metrics(ticker: str, current_price: float = 0.0) -> Dict[str, An
         result["source"] += " (L/S fallback)"
     return result
 
-@st.cache_data(ttl=60, show_spinner="Gathering cross-asset macro indicators...")
+@st.cache_data(ttl=45, show_spinner="Gathering cross-asset macro indicators...")
 def load_macro_data() -> Dict[str, pd.DataFrame]:
     """Expanded free macro set via Yahoo Finance (no API key)."""
     macro_tickers = {
@@ -2242,7 +2194,7 @@ def compute_sentiment_score(fear_greed_value: str, news_articles: List[Dict]) ->
         details["Fear & Greed"] = 0.0
     
     if news_articles:
-        sia = get_sia() or SIA()
+        sia = SIA()
         scores = [sia.polarity_scores(a["title"])["compound"] for a in news_articles]
         avg_sent = np.mean(scores) if scores else 0.0
         news_score = avg_sent * 50
@@ -2713,35 +2665,6 @@ t_raw = st.sidebar.text_input(
 if t_raw != st.session_state.main_tickers_value:
     st.session_state.main_tickers_value = t_raw
 
-# One-click presets
-st.sidebar.caption("Presets")
-_p1, _p2 = st.sidebar.columns(2)
-_presets = {
-    "Crypto majors": "BTC, ETH, SOL, XRP",
-    "Mag7": "AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA",
-    "Risk-off": "TLT, GLD, UUP, SPY",
-    "Index ETFs": "SPY, QQQ, IWM, DIA",
-}
-_pkeys = list(_presets.keys())
-with _p1:
-    if st.button(_pkeys[0], key="preset_0", use_container_width=True):
-        st.session_state.main_tickers_value = _presets[_pkeys[0]]
-        st.session_state.url_tickers_applied = True
-        st.rerun()
-    if st.button(_pkeys[2], key="preset_2", use_container_width=True):
-        st.session_state.main_tickers_value = _presets[_pkeys[2]]
-        st.session_state.url_tickers_applied = True
-        st.rerun()
-with _p2:
-    if st.button(_pkeys[1], key="preset_1", use_container_width=True):
-        st.session_state.main_tickers_value = _presets[_pkeys[1]]
-        st.session_state.url_tickers_applied = True
-        st.rerun()
-    if st.button(_pkeys[3], key="preset_3", use_container_width=True):
-        st.session_state.main_tickers_value = _presets[_pkeys[3]]
-        st.session_state.url_tickers_applied = True
-        st.rerun()
-
 tkrs = [t.strip().upper() for t in st.session_state.main_tickers_value.split(",") if t.strip()]
 tkrs = normalize_user_tickers(tkrs)
 # Performance cap — free Yahoo endpoints stay responsive
@@ -2776,9 +2699,9 @@ with st.sidebar.expander("🔗 Share this setup"):
 
 res_disp = st.sidebar.selectbox("Resolution", list(RESOLUTION_MAP.keys()))
 # Fixed refresh for live prices / candles / macro. Heavy blocks use longer cache TTLs (~3 min).
-FIXED_REFRESH_SEC = 60
+FIXED_REFRESH_SEC = 45
 rf_rate = FIXED_REFRESH_SEC
-st.sidebar.caption("Live data ~60s · Chart tab has Analyze/Live modes")
+st.sidebar.caption("Live data ~45s · Chart tab has Analyze/Live modes")
 chart_mode = st.sidebar.radio(
     "Chart mode",
     ["Analyze (pan/zoom stays)", "Live (auto candles)"],
@@ -2943,35 +2866,6 @@ if nav == "☀️ Briefing":
             pass
         st.markdown(f"**Regime read:** {regime}")
 
-        # --- Event banner (calendar today/tomorrow) ---
-        try:
-            _cal = get_economic_calendar(days_ahead=2)
-            if _cal is not None and not _cal.empty:
-                _hot = _cal[_cal["Days"] <= 1]
-                if not _hot.empty:
-                    _ev = " · ".join(
-                        [f"**{r.Event}** ({'today' if r.Days == 0 else 'tomorrow'})" for _, r in _hot.head(3).iterrows()]
-                    )
-                    st.warning(f"📅 Event window: {_ev}")
-        except Exception:
-            pass
-
-        # --- Since last visit (session snapshot) ---
-        try:
-            _snap_prices = {}
-            if brief_data:
-                for _t, _df in brief_data.items():
-                    if _df is not None and not _df.empty and "close" in _df.columns:
-                        _snap_prices[_t] = float(_df["close"].iloc[-1])
-            # also board majors if present later — update again after board load
-            if _snap_prices:
-                _diffs = update_and_diff_last_visit(_snap_prices)
-                if _diffs:
-                    _ago = st.session_state.get("_last_visit_ago", "")
-                    st.info("Since last visit" + str(_ago) + ": " + " · ".join(_diffs))
-        except Exception:
-            pass
-
         # --- 1) Session checklist ---
         sess = get_us_session_label()
         st.markdown(f"**Session:** {sess['session']} · {sess['et_clock']}")
@@ -3006,8 +2900,6 @@ if nav == "☀️ Briefing":
                     _btc_chg = float(rowb["Chg%"].iloc[0])
         except Exception:
             _board_tmp = None
-        # Reuse for live board section (avoid second fetch in same run)
-        st.session_state["_brief_board"] = _board_tmp
 
         # --- 4) Risk-on / risk-off score ---
         risk = compute_risk_score(macro_snap, fng_v, btc_chg=_btc_chg, spy_chg=_spy_chg)
@@ -3095,9 +2987,7 @@ if nav == "☀️ Briefing":
         st.markdown("##### Live market board")
         st.caption("Major ETFs, mega-cap stocks, and crypto — last daily close & change (Yahoo, ~1 min cache)")
         try:
-            board = st.session_state.get("_brief_board")
-            if board is None:
-                board = load_live_board()
+            board = load_live_board()
             if board is not None and not board.empty:
                 # Split stocks vs crypto for readability
                 crypto_syms = {"BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD"}
@@ -3809,7 +3699,7 @@ if nav == "📰 LiveMacro/Crypto/StockNews":
     except Exception:
         crypto_only = []
 
-    sia = get_sia() or SIA()
+    sia = SIA()
 
     def _render_article_list(items, empty_msg="No articles right now."):
         if not items:
