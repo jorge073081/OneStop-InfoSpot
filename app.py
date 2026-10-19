@@ -1009,20 +1009,23 @@ def get_economic_calendar(days_ahead: int = 45) -> pd.DataFrame:
         ("2027-06-05", "US Employment (NFP)", "High", "Jobs + unemployment"),
         ("2027-06-17", "FOMC Rate Decision", "High", "Fed policy + press conference"),
     ]
-    today = pd.Timestamp.utcnow().normalize()
+    today = pd.Timestamp.now(tz="UTC").normalize()
     rows = []
     for d, name, impact, notes in events:
-        dt = pd.Timestamp(d, tz="UTC")
+        try:
+            dt = pd.Timestamp(d).tz_localize("UTC").normalize()
+        except Exception:
+            dt = pd.Timestamp(d, tz="UTC").normalize()
         if dt < today - pd.Timedelta(days=1):
             continue
-        if dt > today + pd.Timedelta(days=days_ahead):
+        if dt > today + pd.Timedelta(days=int(days_ahead)):
             continue
         rows.append({
             "Date": dt.strftime("%Y-%m-%d"),
             "Event": name,
             "Impact": impact,
             "Notes": notes,
-            "Days": int((dt.normalize() - today).days),
+            "Days": int((dt - today).days),
         })
     return pd.DataFrame(rows)
 
@@ -2913,7 +2916,11 @@ nav = st.radio(
 
 # Pause auto-refresh only in Chart + Analyze mode (keeps pan/zoom)
 # Live mode on Chart (and all other tabs) still auto-refresh ~45s
-_pause_refresh = (nav == "📈 Chart" and str(chart_mode).startswith("Analyze"))
+try:
+    _cm = chart_mode
+except NameError:
+    _cm = "Analyze (pan/zoom stays)"
+_pause_refresh = (nav == "📈 Chart" and str(_cm).startswith("Analyze"))
 if not _pause_refresh:
     st_autorefresh(interval=rf_rate * 1000, key="datarefresh")
 
@@ -3187,7 +3194,7 @@ if nav == "☀️ Briefing":
 
         # --- Live market board (stocks + crypto) ---
         st.markdown("##### Live market board")
-        st.caption("Major ETFs, mega-cap stocks, and crypto — last daily close & change (Yahoo, ~1 min cache)")
+        st.caption("Major ETFs, mega-cap stocks, and crypto — last daily close & change (Yahoo, ~45s cache)")
         try:
             board = st.session_state.get("_brief_board")
             if board is None:
