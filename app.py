@@ -698,6 +698,186 @@ def load_live_board(symbols: Tuple[str, ...] = None) -> pd.DataFrame:
     return df
 
 
+
+def get_us_session_label(now_utc: Optional[pd.Timestamp] = None) -> Dict[str, str]:
+    """Rough US equity session label in America/New_York (no exchange holiday calendar)."""
+    try:
+        now = now_utc or pd.Timestamp.utcnow()
+        if now.tzinfo is None:
+            now = now.tz_localize("UTC")
+        et = now.tz_convert("America/New_York")
+    except Exception:
+        et = pd.Timestamp.now(tz="America/New_York")
+    wd = et.dayofweek  # Mon=0
+    mins = et.hour * 60 + et.minute
+    pre_s, rth_s, rth_e, ah_e = 4 * 60, 9 * 60 + 30, 16 * 60, 20 * 60
+    if wd >= 5:
+        session = "Weekend"
+        focus = "Plan levels · light liquidity — prefer higher timeframes"
+    elif mins < pre_s:
+        session = "Overnight"
+        focus = "Futures & crypto leading · watch overnight gaps into the open"
+    elif mins < rth_s:
+        session = "Pre-market"
+        focus = "Gaps & news · size smaller until cash open (9:30 ET)"
+    elif mins < rth_e:
+        session = "RTH (cash session)"
+        focus = "Best liquidity window · respect open range and VWAP context"
+    elif mins < ah_e:
+        session = "After-hours"
+        focus = "Thin books · earnings reactions · avoid chasing prints"
+    else:
+        session = "Evening"
+        focus = "Debrief · mark levels for tomorrow’s pre-market"
+    return {
+        "session": session,
+        "focus": focus,
+        "et_clock": et.strftime("%Y-%m-%d %H:%M ET"),
+    }
+
+
+def compute_risk_score(macro_snap: Dict, fng_v, btc_chg: Optional[float] = None, spy_chg: Optional[float] = None) -> Dict[str, Any]:
+    """Simple 0–100 risk appetite score from free macro prints."""
+    score = 50
+    details = []
+    try:
+        fv = float(fng_v)
+        if fv <= 25:
+            score -= 15
+            details.append("Fear&Greed low")
+        elif fv >= 75:
+            score += 12
+            details.append("Fear&Greed high")
+    except Exception:
+        pass
+    try:
+        if "VIX" in macro_snap and not macro_snap["VIX"].empty:
+            vix = float(macro_snap["VIX"]["close"].iloc[-1])
+            if vix >= 25:
+                score -= 18
+                details.append(f"VIX {vix:.1f}")
+            elif vix <= 15:
+                score += 10
+                details.append(f"VIX {vix:.1f}")
+    except Exception:
+        pass
+    try:
+        dxy_k = "DXY (U.S. Dollar Index)"
+        if dxy_k in macro_snap and not macro_snap[dxy_k].empty:
+            dxy = macro_snap[dxy_k]
+            ch = (float(dxy["close"].iloc[-1]) / float(dxy["close"].iloc[-2]) - 1) * 100 if len(dxy) > 1 else 0
+            if ch > 0.3:
+                score -= 8
+                details.append("USD up")
+            elif ch < -0.3:
+                score += 6
+                details.append("USD soft")
+    except Exception:
+        pass
+    try:
+        y2, y10 = macro_snap.get("U.S. 2Y Yield"), macro_snap.get("U.S. 10Y Treasury Yield")
+        if y2 is not None and y10 is not None and not y2.empty and not y10.empty:
+            common = y2["close"].index.intersection(y10["close"].index)
+            sp = float(y10["close"].loc[common].iloc[-1] - y2["close"].loc[common].iloc[-1])
+            if sp < 0:
+                score -= 10
+                details.append("2s10s inverted")
+            elif sp > 0.5:
+                score += 5
+                details.append("curve positive")
+    except Exception:
+        pass
+    if btc_chg is not None:
+        if btc_chg > 2:
+            score += 8
+            details.append(f"BTC {btc_chg:+.1f}%")
+        elif btc_chg < -2:
+            score -= 8
+            details.append(f"BTC {btc_chg:+.1f}%")
+    if spy_chg is not None:
+        if spy_chg > 0.5:
+            score += 6
+            details.append(f"SPY {spy_chg:+.1f}%")
+        elif spy_chg < -0.5:
+            score -= 6
+            details.append(f"SPY {spy_chg:+.1f}%")
+    score = int(max(0, min(100, score)))
+    if score >= 65:
+        label, color = "Risk-on", "🟢"
+    elif score <= 35:
+        label, color = "Risk-off", "🔴"
+    else:
+        label, color = "Mixed / neutral", "🟡"
+    return {"score": score, "label": label, "color": color, "details": details}
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def load_gap_and_levels(symbols: Tuple[str, ...]) -> pd.DataFrame:
+    """Daily gaps + basic levels for a small symbol list (Yahoo)."""
+    rows = []
+    syms = list(symbols)[:12]
+
+    def _one(sym: str):
+        try:
+            h = yf.Ticker(sym).history(period="1y", interval="1d", auto_adjust=True)
+            if h is None or len(h) < 5 or "Close" not in h.columns:
+                return None
+            h = h.dropna(subset=["Close"])
+            last = h.iloc[-1]
+            prev = h.iloc[-2]
+            px = float(last["Close"])
+            prev_c = float(prev["Close"])
+            prev_h = float(prev["High"]) if "High" in h.columns else prev_c
+            prev_l = float(prev["Low"]) if "Low" in h.columns else prev_c
+            gap = (px / prev_c - 1) * 100 if prev_c else 0.0
+            # classic floor pivot from prior day
+            pivot = (prev_h + prev_l + prev_c) / 3.0
+            r1 = 2 * pivot - prev_l
+            s1 = 2 * pivot - prev_h
+            # SMA50
+            sma50 = float(h["Close"].tail(50).mean()) if len(h) >= 50 else float(h["Close"].mean())
+            vs_sma = (px / sma50 - 1) * 100 if sma50 else 0.0
+            # relative volume
+            rel_vol = np.nan
+            if "Volume" in h.columns and len(h) > 5:
+                avg_v = float(h["Volume"].tail(20).mean())
+                last_v = float(last["Volume"]) if pd.notna(last["Volume"]) else np.nan
+                if avg_v and avg_v > 0 and pd.notna(last_v):
+                    rel_vol = last_v / avg_v
+            y_hi = float(h["High"].max()) if "High" in h.columns else px
+            y_lo = float(h["Low"].min()) if "Low" in h.columns else px
+            return {
+                "Symbol": sym,
+                "Price": px,
+                "Gap %": gap,
+                "Prev C": prev_c,
+                "Prev H": prev_h,
+                "Prev L": prev_l,
+                "Pivot": pivot,
+                "R1": r1,
+                "S1": s1,
+                "vs SMA50 %": vs_sma,
+                "Rel Vol": rel_vol,
+                "52W High": y_hi,
+                "52W Low": y_lo,
+            }
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        futs = {ex.submit(_one, s): s for s in syms}
+        for fut in as_completed(futs):
+            try:
+                r = fut.result()
+                if r:
+                    rows.append(r)
+            except Exception:
+                pass
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows)
+
+
 def get_economic_calendar(days_ahead: int = 45) -> pd.DataFrame:
     """
     Static high-impact US macro calendar (free, no API).
@@ -2685,6 +2865,90 @@ if nav == "☀️ Briefing":
         except Exception:
             pass
         st.markdown(f"**Regime read:** {regime}")
+
+        # --- 1) Session checklist ---
+        sess = get_us_session_label()
+        st.markdown(f"**Session:** {sess['session']} · {sess['et_clock']}")
+        st.caption(sess["focus"])
+        try:
+            cal_today = get_economic_calendar(days_ahead=3)
+            if cal_today is not None and not cal_today.empty:
+                soon = cal_today[cal_today["Days"] <= 1]
+                if not soon.empty:
+                    bits = [f"{r.Event} ({r.Date})" for _, r in soon.head(3).iterrows()]
+                    st.caption("Near-term calendar: " + " · ".join(bits))
+        except Exception:
+            pass
+
+        # BTC / SPY day change for risk score (from board or brief)
+        _btc_chg = _spy_chg = None
+        try:
+            if brief_data and "BTC-USD" in brief_data and not brief_data["BTC-USD"].empty:
+                bdf = brief_data["BTC-USD"]
+                if "close" in bdf.columns and len(bdf) > 1:
+                    _btc_chg = (float(bdf["close"].iloc[-1]) / float(bdf["close"].iloc[-2]) - 1) * 100
+        except Exception:
+            pass
+        try:
+            _board_tmp = load_live_board()
+            if _board_tmp is not None and not _board_tmp.empty:
+                row = _board_tmp[_board_tmp["Symbol"] == "SPY"]
+                if not row.empty and "Chg%" in row.columns:
+                    _spy_chg = float(row["Chg%"].iloc[0])
+                rowb = _board_tmp[_board_tmp["Symbol"] == "BTC-USD"]
+                if _btc_chg is None and not rowb.empty and "Chg%" in rowb.columns:
+                    _btc_chg = float(rowb["Chg%"].iloc[0])
+        except Exception:
+            _board_tmp = None
+
+        # --- 4) Risk-on / risk-off score ---
+        risk = compute_risk_score(macro_snap, fng_v, btc_chg=_btc_chg, spy_chg=_spy_chg)
+        r1, r2, r3 = st.columns([1, 1, 2])
+        r1.metric("Risk appetite", f"{risk['color']} {risk['score']}/100")
+        r2.metric("Bias", risk["label"])
+        r3.caption("Drivers: " + (", ".join(risk["details"]) if risk["details"] else "limited inputs"))
+
+        # --- 2 & 3) Gap scanner + levels for sidebar tickers (capped) ---
+        gap_syms = []
+        if tkrs:
+            gap_syms.extend(tkrs[:6])
+        for s in ("SPY", "QQQ", "BTC-USD"):
+            if s not in gap_syms:
+                gap_syms.append(s)
+        try:
+            levels_df = load_gap_and_levels(tuple(gap_syms[:10]))
+        except Exception:
+            levels_df = pd.DataFrame()
+
+        if levels_df is not None and not levels_df.empty:
+            st.markdown("##### Gap scanner")
+            st.caption("Overnight/session gap vs prior close · rel volume · vs SMA50 (daily Yahoo, ~2 min cache)")
+            gshow = levels_df[["Symbol", "Price", "Gap %", "Rel Vol", "vs SMA50 %"]].copy()
+            gshow = gshow.sort_values("Gap %", key=lambda s: s.abs(), ascending=False)
+            gshow["Price"] = gshow["Price"].map(lambda x: format_price(x))
+            gshow["Gap %"] = gshow["Gap %"].map(lambda x: f"{x:+.2f}%")
+            gshow["vs SMA50 %"] = gshow["vs SMA50 %"].map(lambda x: f"{x:+.2f}%")
+            gshow["Rel Vol"] = gshow["Rel Vol"].map(lambda x: f"{x:.2f}x" if pd.notna(x) else "—")
+            st.dataframe(gshow, use_container_width=True, hide_index=True)
+
+            st.markdown("##### Levels cards")
+            st.caption("Prior day H/L/C · floor pivot · R1/S1 · 52w range")
+            show_n = min(4, len(levels_df))
+            cols = st.columns(show_n)
+            top = levels_df.sort_values("Gap %", key=lambda s: s.abs(), ascending=False).head(show_n)
+            for i, (_, row) in enumerate(top.iterrows()):
+                with cols[i]:
+                    st.markdown(f"**{row['Symbol']}**")
+                    st.write(format_price(row["Price"]))
+                    st.caption(
+                        f"Prev C {format_price(row['Prev C'])} · H {format_price(row['Prev H'])} · L {format_price(row['Prev L'])}"
+                    )
+                    st.caption(
+                        f"Pivot {format_price(row['Pivot'])} · R1 {format_price(row['R1'])} · S1 {format_price(row['S1'])}"
+                    )
+                    st.caption(
+                        f"52w {format_price(row['52W Low'])} – {format_price(row['52W High'])}"
+                    )
 
         # --- Top metrics ---
         c = st.columns(6)
