@@ -3383,59 +3383,59 @@ if nav == "🔮 Predictive":
                     )
                 
                 with score_col2:
-                            st.metric("Current Price", f"${prediction['current_price']:,.2f}")
-                        st.metric("Recent Volatility", f"{prediction['recent_volatility_pct']:.2f}%")
-    
-                    with score_col3:
-                        st.metric("Projected Upside", f"${prediction['projected_upside']:,.2f}")
-                        st.metric("Projected Downside", f"${prediction['projected_downside']:,.2f}")
-    
-                    st.markdown("---")
-    
-                    st.markdown("### Factor Breakdown")
-    
-                    comp_cols = st.columns(4)
-                    component_names = ["Technical", "Positioning", "Sentiment", "Macro"]
-                    component_icons = ["📈", "⚖️", "📰", "🌐"]
-    
-                    for i, name in enumerate(component_names):
-                        comp = prediction["components"][name]
-                        with comp_cols[i]:
-                            color = "#00FF7F" if comp["score"] > 10 else "#FF4500" if comp["score"] < -10 else "#00FFFF"
-                            st.markdown(
-                                f"""
-                                <div style="background:#1a1d24; border-radius:8px; padding:14px; text-align:center; border:1px solid #3b4252;">
-                                    <div style="font-size:1.5rem;">{component_icons[i]}</div>
-                                    <div style="font-size:0.85rem; color:#a0a0a0;">{name}</div>
-                                    <div style="font-size:1.8rem; font-weight:700; color:{color};">{comp['score']:+.1f}</div>
-                                </div>
-                                """,
-                                unsafe_allow_html=True,
-                            )
-    
-                    st.markdown("#### Detailed Signal Contributions")
-                    detail_rows = []
-                    for name in component_names:
-                        for k, v in prediction["components"][name]["details"].items():
-                            detail_rows.append({
-                                "Factor Group": name,
-                                "Signal": k,
-                                "Contribution": f"{v:+.1f}"
-                            })
-    
-                    if detail_rows:
-                        st.dataframe(
-                            pd.DataFrame(detail_rows),
-                            use_container_width=True,
-                            hide_index=True,
+                    st.metric("Current Price", f"${prediction['current_price']:,.2f}")
+                    st.metric("Recent Volatility", f"{prediction['recent_volatility_pct']:.2f}%")
+                
+                with score_col3:
+                    st.metric("Projected Upside", f"${prediction['projected_upside']:,.2f}")
+                    st.metric("Projected Downside", f"${prediction['projected_downside']:,.2f}")
+                
+                st.markdown("---")
+                
+                st.markdown("### Factor Breakdown")
+                
+                comp_cols = st.columns(4)
+                component_names = ["Technical", "Positioning", "Sentiment", "Macro"]
+                component_icons = ["📈", "⚖️", "📰", "🌐"]
+                
+                for i, name in enumerate(component_names):
+                    comp = prediction["components"][name]
+                    with comp_cols[i]:
+                        color = "#00FF7F" if comp["score"] > 10 else "#FF4500" if comp["score"] < -10 else "#00FFFF"
+                        st.markdown(
+                            f"""
+                            <div style="background:#1a1d24; border-radius:8px; padding:14px; text-align:center; border:1px solid #3b4252;">
+                                <div style="font-size:1.5rem;">{component_icons[i]}</div>
+                                <div style="font-size:0.85rem; color:#a0a0a0;">{name}</div>
+                                <div style="font-size:1.8rem; font-weight:700; color:{color};">{comp['score']:+.1f}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
                         )
-    
-                    st.markdown("### Score Visualization")
-                    fig_score = go.Figure()
-    
-                    fig_score.add_trace(go.Bar(
-                        x=["Technical", "Positioning", "Sentiment", "Macro", "OVERALL"],
-                        y=[
+                
+                st.markdown("#### Detailed Signal Contributions")
+                detail_rows = []
+                for name in component_names:
+                    for k, v in prediction["components"][name]["details"].items():
+                        detail_rows.append({
+                            "Factor Group": name,
+                            "Signal": k,
+                            "Contribution": f"{v:+.1f}"
+                        })
+                
+                if detail_rows:
+                    st.dataframe(
+                        pd.DataFrame(detail_rows),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                
+                st.markdown("### Score Visualization")
+                fig_score = go.Figure()
+                
+                fig_score.add_trace(go.Bar(
+                    x=["Technical", "Positioning", "Sentiment", "Macro", "OVERALL"],
+                    y=[
                         prediction["components"]["Technical"]["score"],
                         prediction["components"]["Positioning"]["score"],
                         prediction["components"]["Sentiment"]["score"],
