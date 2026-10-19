@@ -2520,9 +2520,9 @@ st.caption("Dark mode • Candlesticks • Pattern Recognition • Long/Short Al
 _view_map = {
     "briefing": "☀️ Briefing",
     "chart": "📈 Chart",
-    "crypto": "⚡ Crypto",
+    "crypto": "🌐 Crypto/Macro",
     "compare": "🔀 Compare",
-    "macro": "🌐 Macro",
+    "macro": "🌐 Crypto/Macro",
     "predictive": "🔮 Predictive",
     "analysis": "📊 Analysis",
     "screener": "🔎 Screener",
@@ -2537,7 +2537,7 @@ except Exception:
 
 nav = st.radio(
     "Navigate",
-    ["☀️ Briefing", "📈 Chart", "⚡ Crypto", "🔀 Compare", "🌐 Macro", "🔮 Predictive", "📊 Analysis", "🔎 Screener", "🛠️ Tools"],
+    ["☀️ Briefing", "📈 Chart", "🔀 Compare", "🌐 Crypto/Macro", "🔮 Predictive", "📊 Analysis", "🔎 Screener", "🛠️ Tools"],
     horizontal=True,
     label_visibility="collapsed",
     key="main_nav",
@@ -2651,7 +2651,7 @@ if nav == "☀️ Briefing":
                         disp["Chg%"] = disp["Chg%"].map(lambda x: f"{x:+.2f}%")
                         st.dataframe(disp, use_container_width=True, hide_index=True)
                 with b2:
-                    st.markdown("**Crypto**")
+                    st.markdown("**Crypto/Macro**")
                     if not cryptos.empty:
                         disp = cryptos.copy()
                         disp["Price"] = disp["Price"].map(lambda x: format_price(x))
@@ -2831,7 +2831,7 @@ if nav == "☀️ Briefing":
                             st.caption(f"52W: {snap['52W Range']}")
                         st.caption(snap.get("As Of") or "")
 
-        st.caption("Next: **Crypto** for charts · **Compare** for relative strength · **Macro** for yields & FRED · **Screener** for leaders")
+        st.caption("Next: **Crypto/Macro** for charts · **Compare** for relative strength · **Macro** for yields & FRED · **Screener** for leaders")
 
 
 if nav == "🔀 Compare":
@@ -3051,9 +3051,9 @@ if nav == "📈 Chart":
                     cols[1].metric("MACD", f"{h_data['macd'].iloc[-1]:.4f}" if pd.notna(h_data['macd'].iloc[-1]) else "—")
 
 
-if nav == "⚡ Crypto":
-    st.subheader("⚡ Crypto desk")
-    st.caption("Positioning, pivots, liquidity, and news. Full candlestick workspace is under **Chart**.")
+if nav == "🌐 Crypto/Macro":
+    st.subheader("🌐 Crypto / Macro")
+    st.caption("Crypto positioning, pivots, liquidity & news · broad market macro · DeFi. Charts live under **Chart**.")
     if not tkrs:
         st.info("Enter at least one ticker in the sidebar.")
     else:
@@ -3200,8 +3200,8 @@ if nav == "⚡ Crypto":
                 fng_v, fng_c = get_fear_greed()
                 st.metric("Fear & Greed Index", f"{fng_v}/100", fng_c)
 
-if nav == "🌐 Macro":
-    st.subheader("🌐 Broad Market Telemetry Framework")
+    st.markdown("---")
+    st.subheader("Broad Market Telemetry")
     st.caption("Equities • Yields • Commodities • Volatility • DeFi liquidity — free public feeds.")
     
     macro_data = load_macro_data()
@@ -3713,7 +3713,7 @@ if nav == "🔎 Screener":
                 # Prefer -USD style only for crypto; these are stocks
                 st.session_state.main_tickers_value = ", ".join(top)
                 st.session_state.url_tickers_applied = True
-                st.success("Updated tickers — open **Crypto** or **Compare** to chart them.")
+                st.success("Updated tickers — open **Crypto/Macro** or **Compare** to chart them.")
                 st.rerun()
 
 
