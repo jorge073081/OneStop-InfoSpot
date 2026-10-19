@@ -708,6 +708,47 @@ def load_live_board(symbols: Tuple[str, ...] = None) -> pd.DataFrame:
 
 
 
+
+def update_and_diff_last_visit(prices: Dict[str, float], min_age_sec: int = 120) -> List[str]:
+    """Compare current prices to last snapshot; only refresh baseline after min_age (survives auto-refresh)."""
+    if not prices:
+        return []
+    prev = st.session_state.get("_last_visit_prices") or {}
+    prev_ts = st.session_state.get("_last_visit_ts")
+    lines = []
+    now = time.time()
+    age = (now - float(prev_ts)) if prev_ts else None
+    if prev and isinstance(prev, dict) and age is not None and age >= min_age_sec:
+        if age < 3600:
+            ago = f" · {int(age // 60)}m ago"
+        else:
+            ago = f" · {int(age // 3600)}h ago"
+        for sym, px in prices.items():
+            try:
+                px = float(px)
+                old = prev.get(sym)
+                if old is None:
+                    continue
+                old = float(old)
+                if old <= 0:
+                    continue
+                ch = (px / old - 1) * 100
+                if abs(ch) < 0.05:
+                    lines.append(f"{sym.replace('-USD', '')} flat")
+                else:
+                    lines.append(f"{sym.replace('-USD', '')} {ch:+.2f}%")
+            except Exception:
+                continue
+        st.session_state["_last_visit_ago"] = ago
+    # Establish or roll baseline: first time, or after 15 minutes
+    if not prev or age is None or age >= 900:
+        st.session_state["_last_visit_prices"] = {
+            k: float(v) for k, v in prices.items() if v is not None
+        }
+        st.session_state["_last_visit_ts"] = now
+    return lines[:8]
+
+
 def get_us_session_label(now_utc: Optional[pd.Timestamp] = None) -> Dict[str, str]:
     """Rough US equity session label in America/New_York (no exchange holiday calendar)."""
     try:
@@ -2672,6 +2713,35 @@ t_raw = st.sidebar.text_input(
 if t_raw != st.session_state.main_tickers_value:
     st.session_state.main_tickers_value = t_raw
 
+# One-click presets
+st.sidebar.caption("Presets")
+_p1, _p2 = st.sidebar.columns(2)
+_presets = {
+    "Crypto majors": "BTC, ETH, SOL, XRP",
+    "Mag7": "AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA",
+    "Risk-off": "TLT, GLD, UUP, SPY",
+    "Index ETFs": "SPY, QQQ, IWM, DIA",
+}
+_pkeys = list(_presets.keys())
+with _p1:
+    if st.button(_pkeys[0], key="preset_0", use_container_width=True):
+        st.session_state.main_tickers_value = _presets[_pkeys[0]]
+        st.session_state.url_tickers_applied = True
+        st.rerun()
+    if st.button(_pkeys[2], key="preset_2", use_container_width=True):
+        st.session_state.main_tickers_value = _presets[_pkeys[2]]
+        st.session_state.url_tickers_applied = True
+        st.rerun()
+with _p2:
+    if st.button(_pkeys[1], key="preset_1", use_container_width=True):
+        st.session_state.main_tickers_value = _presets[_pkeys[1]]
+        st.session_state.url_tickers_applied = True
+        st.rerun()
+    if st.button(_pkeys[3], key="preset_3", use_container_width=True):
+        st.session_state.main_tickers_value = _presets[_pkeys[3]]
+        st.session_state.url_tickers_applied = True
+        st.rerun()
+
 tkrs = [t.strip().upper() for t in st.session_state.main_tickers_value.split(",") if t.strip()]
 tkrs = normalize_user_tickers(tkrs)
 # Performance cap — free Yahoo endpoints stay responsive
@@ -2872,6 +2942,35 @@ if nav == "☀️ Briefing":
         except Exception:
             pass
         st.markdown(f"**Regime read:** {regime}")
+
+        # --- Event banner (calendar today/tomorrow) ---
+        try:
+            _cal = get_economic_calendar(days_ahead=2)
+            if _cal is not None and not _cal.empty:
+                _hot = _cal[_cal["Days"] <= 1]
+                if not _hot.empty:
+                    _ev = " · ".join(
+                        [f"**{r.Event}** ({'today' if r.Days == 0 else 'tomorrow'})" for _, r in _hot.head(3).iterrows()]
+                    )
+                    st.warning(f"📅 Event window: {_ev}")
+        except Exception:
+            pass
+
+        # --- Since last visit (session snapshot) ---
+        try:
+            _snap_prices = {}
+            if brief_data:
+                for _t, _df in brief_data.items():
+                    if _df is not None and not _df.empty and "close" in _df.columns:
+                        _snap_prices[_t] = float(_df["close"].iloc[-1])
+            # also board majors if present later — update again after board load
+            if _snap_prices:
+                _diffs = update_and_diff_last_visit(_snap_prices)
+                if _diffs:
+                    _ago = st.session_state.get("_last_visit_ago", "")
+                    st.info("Since last visit" + str(_ago) + ": " + " · ".join(_diffs))
+        except Exception:
+            pass
 
         # --- 1) Session checklist ---
         sess = get_us_session_label()
