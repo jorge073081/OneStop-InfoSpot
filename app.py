@@ -1614,7 +1614,7 @@ def filter_news_for_tickers(news: List[Dict], tickers: List[str]) -> List[Dict]:
     return hits
 
 
-@st.cache_data(ttl=180, show_spinner="Fetching market news…")
+@st.cache_data(ttl=900, show_spinner="Fetching market news…")
 def get_market_news(cache_buster: str = "", max_items: int = 40) -> List[Dict]:
     """
     Free multi-source news: Fed, SEC, Stocks/Macro, Crypto.
@@ -2846,9 +2846,9 @@ if nav == "☀️ Briefing":
                 st.caption("Futures metrics unavailable right now.")
 
         st.markdown("##### Market-moving headlines")
-        st.caption(f"Fed · SEC · Stocks · Crypto — free RSS · as of {_asof}")
+        st.caption(f"Fed · SEC · Stocks · Crypto — free RSS (~15 min cache) · as of {_asof}")
         try:
-            news = get_market_news(cache_buster=pd.Timestamp.now().strftime("%Y-%m-%d %H"), max_items=40)
+            news = get_market_news(cache_buster="news-v1", max_items=40)
             if not news:
                 st.caption("No headlines right now.")
             else:
@@ -3417,11 +3417,11 @@ if nav == "📰 LiveMacro/Crypto/StockNews":
     m1, m2, m3 = st.columns(3)
     m1.metric("Fear & Greed", f"{fng_v}/100", str(fng_c)[:20] if fng_c else "")
     m2.metric("Sources", "Fed · SEC · Stocks · Crypto")
-    m3.caption("Cached ~3 min · free RSS")
+    m3.caption("Cached ~15 min · free RSS (no API key)")
 
     try:
         all_news = get_market_news(
-            cache_buster=pd.Timestamp.now().strftime("%Y-%m-%d %H"),
+            cache_buster="news-v1",
             max_items=48,
         )
     except Exception:
@@ -3429,7 +3429,7 @@ if nav == "📰 LiveMacro/Crypto/StockNews":
 
     try:
         crypto_only = get_crypto_news(
-            cache_buster=pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"),
+            cache_buster="news-v1",
             max_items=20,
         )
     except Exception:
@@ -3510,7 +3510,7 @@ if nav == "🔮 Predictive":
     else:
         pred_data = load_ticker_data(tuple(tkrs), interval, lookback_bars, period, is_6h)
         fng_v, fng_c = get_fear_greed()
-        news = get_crypto_news(cache_buster=pd.Timestamp.now().strftime('%Y-%m-%d %H:%M'))
+        news = get_crypto_news(cache_buster="news-v1")
         macro_data = load_macro_data()
         
         if not pred_data:
