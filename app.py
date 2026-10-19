@@ -3165,41 +3165,6 @@ if nav == "🌐 Crypto/Macro":
                 st.subheader("🧮 Side-by-Side Pivot Matrix (Daily Pivots)")
                 st.caption("Classic Floor Pivots calculated from the previous daily candle close parameters")
                 st.dataframe(pd.DataFrame(matrix_rows).set_index("Ticker"), use_container_width=True)
-            st.markdown("---")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader("📰 Live Crypto News")
-                pulse_key = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
-                news = get_crypto_news(cache_buster=pulse_key)
-                if news:
-                    sia = SIA()
-                    for art in news:
-                        with st.expander(art["title"]):
-                            score = sia.polarity_scores(art["title"])["compound"]
-                            if score >= 0.05:
-                                status_badge = '<span style="color:#00FF7F; font-weight:bold;">Bullish</span>'
-                            elif score <= -0.05:
-                                status_badge = '<span style="color:#FF4500; font-weight:bold;">Bearish</span>'
-                            else:
-                                status_badge = '<span style="color:#00FFFF; font-weight:bold;">Neutral</span>'
-                            
-                            html_body = f"""
-                            <div class="news-box">
-                                <p class="news-meta">
-                                    <strong>{art['source']}</strong> • {art['published']} • Sentiment: {status_badge} ({score:+.2f})
-                                </p>
-                                <p class="news-summary">{art['summary'] if art['summary'] else ''}</p>
-                                <a href="{art['link']}" target="_blank" class="news-action-link">Open Article ↗</a>
-                            </div>
-                            """
-                            st.markdown(html_body, unsafe_allow_html=True)
-                else:
-                    st.info("No news articles available right now. Try refreshing.")
-            with col2:
-                st.subheader("📊 Sentiment")
-                fng_v, fng_c = get_fear_greed()
-                st.metric("Fear & Greed Index", f"{fng_v}/100", fng_c)
-
     st.markdown("---")
     st.subheader("Broad Market Telemetry")
     st.caption("Equities • Yields • Commodities • Volatility • DeFi liquidity — free public feeds.")
@@ -3350,6 +3315,42 @@ if nav == "🌐 Crypto/Macro":
                          use_container_width=True, hide_index=True)
     else:
         st.caption("DefiLlama data temporarily unavailable.")
+
+
+    st.markdown("---")
+    st.subheader("📰 Live Crypto News & Sentiment")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("##### Headlines")
+        pulse_key = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+        news = get_crypto_news(cache_buster=pulse_key)
+        if news:
+            sia = SIA()
+            for art in news:
+                with st.expander(art["title"]):
+                    score = sia.polarity_scores(art["title"])["compound"]
+                    if score >= 0.05:
+                        status_badge = '<span style="color:#00FF7F; font-weight:bold;">Bullish</span>'
+                    elif score <= -0.05:
+                        status_badge = '<span style="color:#FF4500; font-weight:bold;">Bearish</span>'
+                    else:
+                        status_badge = '<span style="color:#00FFFF; font-weight:bold;">Neutral</span>'
+                    html_body = f"""
+                    <div class="news-box">
+                        <p class="news-meta">
+                            <strong>{art['source']}</strong> • {art['published']} • Sentiment: {status_badge} ({score:+.2f})
+                        </p>
+                        <p class="news-summary">{art['summary'] if art['summary'] else ''}</p>
+                        <a href="{art['link']}" target="_blank" class="news-action-link">Open Article ↗</a>
+                    </div>
+                    """
+                    st.markdown(html_body, unsafe_allow_html=True)
+        else:
+            st.info("No news articles available right now. Try refreshing.")
+    with col2:
+        st.markdown("##### Sentiment")
+        fng_v, fng_c = get_fear_greed()
+        st.metric("Fear & Greed Index", f"{fng_v}/100", fng_c)
 
 # ============================================================
 # PREDICTIVE ANALYTICS TAB
