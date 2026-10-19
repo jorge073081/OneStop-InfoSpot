@@ -15,6 +15,7 @@ import uuid
 from typing import Dict, List, Optional, Tuple, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+
 # ============================================================
 # 1. INITIAL SETUP & MATRIX INTERFACE STYLE SYSTEM
 # ============================================================
@@ -240,6 +241,14 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
+@st.cache_resource(show_spinner=False)
+def get_sia():
+    """Single shared VADER analyzer."""
+    try:
+        return SIA()
+    except Exception:
+        return None
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -659,7 +668,7 @@ def load_fred_dashboard(api_key: str) -> Dict[str, pd.DataFrame]:
 # SHARED / LAZY DATA LAYER (one fetch per ticker+resolution combo)
 # ============================================================
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=45, show_spinner=False)
 def load_live_board(symbols: Tuple[str, ...] = None) -> pd.DataFrame:
     """Quick last price + session change for a fixed board of stocks & crypto."""
     if symbols is None:
@@ -811,7 +820,7 @@ def compute_risk_score(macro_snap: Dict, fng_v, btc_chg: Optional[float] = None,
     return {"score": score, "label": label, "color": color, "details": details}
 
 
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=180, show_spinner=False)
 def load_gap_and_levels(symbols: Tuple[str, ...]) -> pd.DataFrame:
     """Daily gaps + basic levels for a small symbol list (Yahoo)."""
     rows = []
@@ -1087,7 +1096,7 @@ def get_shared_market_data(tickers, interval, lookback, period, is_6h):
     # Soft TTL using timestamp
     now = time.time()
     entry = cache.get(key)
-    if entry and (now - entry.get("ts", 0)) < 45:
+    if entry and (now - entry.get("ts", 0)) < 60:
         return entry["data"]
     data = load_ticker_data(tuple(tickers), interval, lookback, period, is_6h) if tickers else {}
     cache[key] = {"ts": now, "data": data}
@@ -1617,7 +1626,7 @@ def _fetch_one_ticker(t: str, interval: str, lookback: int, period: str, is_6h: 
     return t, None
 
 
-@st.cache_data(ttl=30, show_spinner="Fetching market data (parallel)...")
+@st.cache_data(ttl=45, show_spinner="Fetching market data (parallel)...")
 def load_ticker_data(
     tickers: Tuple[str, ...],
     interval: str,
@@ -1630,7 +1639,7 @@ def load_ticker_data(
     if not tickers:
         return results
     # Cap workers to avoid hammering Yahoo
-    workers = min(8, max(1, len(tickers)))
+    workers = min(6, max(1, len(tickers)))
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = {
             ex.submit(_fetch_one_ticker, t, interval, lookback, period, is_6h): t
@@ -1679,7 +1688,7 @@ def get_daily_pivots(tickers: Tuple[str, ...]) -> Dict[str, Dict[str, float]]:
             continue
     return pivots
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=600)
 def get_fear_greed() -> Tuple[str, str]:
     try:
         res = requests.get("https://api.alternative.me/fng/", headers=HEADERS, timeout=8).json()
@@ -1689,8 +1698,6 @@ def get_fear_greed() -> Tuple[str, str]:
         return "N/A", "Unavailable"
     except Exception:
         return "N/A", "Unavailable"
-
-@st.cache_data(ttl=90, show_spinner="Fetching fresh crypto news...")
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_equity_snapshot(symbol: str) -> Dict[str, Any]:
@@ -1994,7 +2001,7 @@ def get_futures_metrics(ticker: str, current_price: float = 0.0) -> Dict[str, An
         result["source"] += " (L/S fallback)"
     return result
 
-@st.cache_data(ttl=45, show_spinner="Gathering cross-asset macro indicators...")
+@st.cache_data(ttl=60, show_spinner="Gathering cross-asset macro indicators...")
 def load_macro_data() -> Dict[str, pd.DataFrame]:
     """Expanded free macro set via Yahoo Finance (no API key)."""
     macro_tickers = {
@@ -2194,7 +2201,7 @@ def compute_sentiment_score(fear_greed_value: str, news_articles: List[Dict]) ->
         details["Fear & Greed"] = 0.0
     
     if news_articles:
-        sia = SIA()
+        sia = get_sia() or SIA()
         scores = [sia.polarity_scores(a["title"])["compound"] for a in news_articles]
         avg_sent = np.mean(scores) if scores else 0.0
         news_score = avg_sent * 50
@@ -2699,9 +2706,9 @@ with st.sidebar.expander("🔗 Share this setup"):
 
 res_disp = st.sidebar.selectbox("Resolution", list(RESOLUTION_MAP.keys()))
 # Fixed refresh for live prices / candles / macro. Heavy blocks use longer cache TTLs (~3 min).
-FIXED_REFRESH_SEC = 45
+FIXED_REFRESH_SEC = 60
 rf_rate = FIXED_REFRESH_SEC
-st.sidebar.caption("Live data ~45s · Chart tab has Analyze/Live modes")
+st.sidebar.caption("Live data ~60s · Chart tab has Analyze/Live modes")
 chart_mode = st.sidebar.radio(
     "Chart mode",
     ["Analyze (pan/zoom stays)", "Live (auto candles)"],
@@ -2900,6 +2907,8 @@ if nav == "☀️ Briefing":
                     _btc_chg = float(rowb["Chg%"].iloc[0])
         except Exception:
             _board_tmp = None
+        # Reuse for live board section (avoid second fetch in same run)
+        st.session_state["_brief_board"] = _board_tmp
 
         # --- 4) Risk-on / risk-off score ---
         risk = compute_risk_score(macro_snap, fng_v, btc_chg=_btc_chg, spy_chg=_spy_chg)
@@ -2987,7 +2996,9 @@ if nav == "☀️ Briefing":
         st.markdown("##### Live market board")
         st.caption("Major ETFs, mega-cap stocks, and crypto — last daily close & change (Yahoo, ~1 min cache)")
         try:
-            board = load_live_board()
+            board = st.session_state.get("_brief_board")
+            if board is None:
+                board = load_live_board()
             if board is not None and not board.empty:
                 # Split stocks vs crypto for readability
                 crypto_syms = {"BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD"}
@@ -3699,7 +3710,7 @@ if nav == "📰 LiveMacro/Crypto/StockNews":
     except Exception:
         crypto_only = []
 
-    sia = SIA()
+    sia = get_sia() or SIA()
 
     def _render_article_list(items, empty_msg="No articles right now."):
         if not items:
