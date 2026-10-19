@@ -65,32 +65,46 @@ st.markdown(
         .stCaption, [data-testid="stCaption"] { color: var(--muted) !important; }
 
         .block-container {
-            padding-top: 1.1rem !important;
+            padding-top: 1.4rem !important;
             padding-bottom: 2rem !important;
             padding-left: 1.4rem !important;
             padding-right: 1.4rem !important;
             max-width: 1440px;
+            overflow: visible !important;
         }
 
+        .app-header {
+            text-align: center !important;
+            padding: 0.35rem 0.5rem 0.6rem 0.5rem !important;
+            margin: 0 0 0.35rem 0 !important;
+            overflow: visible !important;
+        }
         .silver-title {
             font-family: 'IBM Plex Sans', sans-serif !important;
-            font-size: 1.75rem !important;
+            font-size: 1.85rem !important;
             font-weight: 600 !important;
-            text-align: left;
-            margin: 0 0 0.15rem 0 !important;
+            text-align: center !important;
+            margin: 0.25rem 0 0.25rem 0 !important;
+            padding: 0.15rem 0 !important;
+            line-height: 1.35 !important;
             letter-spacing: -0.02em;
             color: var(--text) !important;
             background: none !important;
             -webkit-text-fill-color: unset !important;
+            overflow: visible !important;
+            white-space: normal !important;
         }
         .silver-subtitle {
             font-family: 'IBM Plex Sans', sans-serif !important;
-            font-size: 0.85rem !important;
+            font-size: 0.9rem !important;
             font-weight: 400 !important;
-            text-align: left;
+            text-align: center !important;
             color: var(--muted) !important;
-            margin: 0 0 0.75rem 0 !important;
+            margin: 0 0 0.5rem 0 !important;
+            padding: 0 !important;
+            line-height: 1.4 !important;
             letter-spacing: 0.02em;
+            overflow: visible !important;
         }
 
         [data-testid="stMetric"] {
@@ -192,8 +206,8 @@ st.markdown(
         }
 
         @media (max-width: 768px) {
-            .silver-title { font-size: 1.35rem !important; }
-            .silver-subtitle { font-size: 0.78rem !important; }
+            .silver-title { font-size: 1.4rem !important; line-height: 1.35 !important; }
+            .silver-subtitle { font-size: 0.8rem !important; }
             .block-container {
                 padding-top: 0.6rem !important;
                 padding-left: 0.65rem !important;
@@ -218,7 +232,7 @@ st.markdown(
         }
 
         @media (max-width: 480px) {
-            .silver-title { font-size: 1.2rem !important; }
+            .silver-title { font-size: 1.25rem !important; line-height: 1.35 !important; }
             [data-testid="stMetricValue"] { font-size: 0.95rem !important; }
         }
     </style>
@@ -2511,8 +2525,13 @@ is_6h = res_cfg["is_6h"]
 
 
 
-st.markdown('<div class="silver-title">OneStop-InfoSpot</div>', unsafe_allow_html=True)
-st.markdown('<div class="silver-subtitle">Market intelligence desk · stocks · crypto · macro</div>', unsafe_allow_html=True)
+st.markdown(
+    "<div class='app-header'>"
+    "<div class='silver-title'>OneStop-InfoSpot</div>"
+    "<div class='silver-subtitle'>Market intelligence desk · stocks · crypto · macro</div>"
+    "</div>",
+    unsafe_allow_html=True,
+)
 st.caption("Dark mode • Candlesticks • Pattern Recognition • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro • 15Y Historical • Predictive Analytics")
 
 # Radio nav = only the active section runs heavy code (faster than st.tabs)
