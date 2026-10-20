@@ -1090,6 +1090,7 @@ def get_economic_calendar(days_ahead: int = 45) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)
 def load_sector_board() -> pd.DataFrame:
     """Sector ETF snapshot — 1D and ~1W change via Yahoo."""
     sectors = {
@@ -1110,20 +1111,38 @@ def load_sector_board() -> pd.DataFrame:
     def _one(sym: str, name: str):
         try:
             h = yf.Ticker(sym).history(period="1mo", interval="1d", auto_adjust=True)
-            if h is None or h.empty or "Close" not in h.columns:
+            if h is None or h.empty:
                 return None
-            px = float(h["Close"].iloc[-1])
-            prev = float(h["Close"].iloc[-2]) if len(h) > 1 else px
-            d1 = ((px / prev) - 1) * 100 if prev else 0.0
-            week_ago = float(h["Close"].iloc[-6]) if len(h) > 6 else prev
-            w1 = ((px / week_ago) - 1) * 100 if week_ago else 0.0
-            return {"Sector": name, "ETF": sym, "Price": px, "1D %": d1, "1W %": w1}
+            col = "Close" if "Close" in h.columns else ("close" if "close" in h.columns else None)
+            if not col:
+                return None
+            closes = h[col].dropna()
+            if len(closes) < 1:
+                return None
+            px = float(closes.iloc[-1])
+            if not np.isfinite(px):
+                return None
+            prev = float(closes.iloc[-2]) if len(closes) > 1 else px
+            if not np.isfinite(prev) or prev == 0:
+                d1 = 0.0
+            else:
+                d1 = ((px / prev) - 1) * 100.0
+            week_ago = float(closes.iloc[-6]) if len(closes) > 6 else prev
+            if not np.isfinite(week_ago) or week_ago == 0:
+                w1 = 0.0
+            else:
+                w1 = ((px / week_ago) - 1) * 100.0
+            if not np.isfinite(d1):
+                d1 = 0.0
+            if not np.isfinite(w1):
+                w1 = 0.0
+            return {"Sector": name, "ETF": sym, "Price": px, "1D %": float(d1), "1W %": float(w1)}
         except Exception:
             return None
 
     rows = []
     syms = list(sectors.items())
-    with ThreadPoolExecutor(max_workers=min(8, len(syms))) as ex:
+    with ThreadPoolExecutor(max_workers=min(6, len(syms))) as ex:
         futs = {ex.submit(_one, s, n): s for s, n in syms}
         for fut in as_completed(futs):
             try:
@@ -3351,8 +3370,14 @@ if nav == "☀️ Briefing":
                 if sec is not None and not sec.empty:
                     disp = sec.copy()
                     disp["Price"] = disp["Price"].map(lambda x: format_price(x))
-                    disp["1D %"] = disp["1D %"].map(lambda x: f"{x:+.2f}%")
-                    disp["1W %"] = disp["1W %"].map(lambda x: f"{x:+.2f}%")
+                    def _pct(x):
+                        try:
+                            v = float(x)
+                            return f"{v:+.2f}%" if np.isfinite(v) else "—"
+                        except Exception:
+                            return "—"
+                    disp["1D %"] = disp["1D %"].map(_pct)
+                    disp["1W %"] = disp["1W %"].map(_pct)
                     st.dataframe(disp, use_container_width=True, hide_index=True)
                 else:
                     st.caption("Sector data unavailable.")
