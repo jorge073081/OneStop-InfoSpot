@@ -2806,9 +2806,6 @@ res_disp = st.sidebar.selectbox("Resolution", list(RESOLUTION_MAP.keys()))
 FIXED_REFRESH_SEC = 60
 rf_rate = FIXED_REFRESH_SEC
 st.sidebar.caption("Live data ~60s · Chart tab has Analyze/Live modes")
-st.sidebar.markdown("---")
-st.sidebar.caption("Educational only — not financial advice. Data may be delayed.")
-
 chart_mode = st.sidebar.radio(
     "Chart mode",
     ["Analyze (pan/zoom stays)", "Live (auto candles)"],
@@ -2886,8 +2883,7 @@ st.markdown(
     "</div>",
     unsafe_allow_html=True,
 )
-st.caption("Free cross-asset desk · stocks · crypto · macro · **educational only**")
-st.caption("✨ What’s new: Market Pulse · event banner · risk score · gaps & levels on Briefing")
+st.caption("Dark mode • Candlesticks • Pattern Recognition • Long/Short Allocation • Open Interest • Funding • RSI • MACD • Bollinger • On-chain • Global Macro • 15Y Historical • Predictive Analytics")
 
 # Radio nav = only the active section runs heavy code (faster than st.tabs)
 # Optional deep-link: ?view=briefing|crypto|compare|macro|screener
@@ -2909,9 +2905,6 @@ try:
         st.session_state.main_nav = _view_map[_vq]
 except Exception:
     pass
-# Default landing tab
-if "main_nav" not in st.session_state:
-    st.session_state.main_nav = "☀️ Briefing"
 
 nav = st.radio(
     "Navigate",
@@ -2942,9 +2935,8 @@ if nav == "☀️ Briefing":
     _asof = pd.Timestamp.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     st.subheader("☀️ Morning Brief")
     st.caption(f"Cross-asset desk · stocks + crypto + policy · **as of {_asof}**")
-    st.caption("For educational and informational purposes only — not investment advice.")
     if not tkrs:
-        st.info("Optional: add tickers in the sidebar for **your** movers, gaps, and snapshots. Board, calendar, pulse & news still load below.")
+        st.info("Add tickers in the sidebar for movers, funding, and equity snapshots. Board, calendar, sectors & news still load below.")
 
     # Always load light desk data (even with no tickers)
     try:
@@ -3242,9 +3234,9 @@ if nav == "☀️ Briefing":
                             st.markdown("**Your tickers**")
                             st.dataframe(pd.DataFrame(extra), use_container_width=True, hide_index=True)
             else:
-                st.caption("Live board temporarily unavailable — free Yahoo feed may be delayed.")
+                st.caption("Live board temporarily unavailable.")
         except Exception:
-            st.caption("Live board temporarily unavailable — free Yahoo feed may be delayed.")
+            st.caption("Live board temporarily unavailable.")
 
         # --- Economic calendar + sectors ---
         cal_col, sec_col = st.columns(2)
@@ -3413,7 +3405,7 @@ if nav == "🔀 Compare/Analysis":
     else:
         cmp_data = get_shared_market_data(tkrs, interval, lookback_bars, period, is_6h)
         if not cmp_data:
-            st.warning("Comparison data unavailable — Yahoo may be delayed. Try fewer tickers or refresh in a minute.")
+            st.warning("Could not load comparison data.")
         else:
             # Performance table
             st.markdown("### Returns snapshot")
@@ -3505,7 +3497,7 @@ if nav == "📈 Chart":
     else:
         data = get_shared_market_data(tkrs, interval, lookback_bars, period, is_6h)
         if not data:
-            st.error("No chart data — check the symbol, try fewer tickers, or wait if Yahoo is delayed.")
+            st.error("No valid data loaded. Check tickers or resolution.")
         else:
             btc_data = None
             if show_vs_btc:
@@ -3629,7 +3621,7 @@ if nav == "⚡ Crypto":
     else:
         data = get_shared_market_data(tkrs, interval, lookback_bars, period, is_6h)
         if not data:
-            st.error("No data returned — Yahoo may be delayed or throttled. Try fewer tickers, another resolution, or wait a minute.")
+            st.error("No valid data loaded. Check tickers or try a different resolution. Some data sources may be temporarily unavailable.")
         else:
 
 
@@ -3765,7 +3757,7 @@ if nav == "🌐 Macro/FRED":
     macro_data = load_macro_data()
     
     if not macro_data:
-        st.info("Macro feed temporarily unavailable (free Yahoo data). Try again shortly.")
+        st.info("Macro data temporarily unavailable. Try refreshing shortly.")
     else:
         # Metrics grid
         m_cols = st.columns(3)
@@ -3997,7 +3989,7 @@ if nav == "🔮 Predictive":
         macro_data = load_macro_data()
         
         if not pred_data:
-            st.error("Prediction needs price history — data unavailable right now. Try fewer tickers or another resolution.")
+            st.error("Unable to load market data for prediction.")
         else:
             pred_ticker = st.selectbox("Select asset for prediction:", list(pred_data.keys()), key="pred_select")
             
