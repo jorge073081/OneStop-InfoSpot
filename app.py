@@ -721,99 +721,39 @@ def load_fred_dashboard(api_key: str) -> Dict[str, pd.DataFrame]:
 # SHARED / LAZY DATA LAYER (one fetch per ticker+resolution combo)
 # ============================================================
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=45, show_spinner=False)
 def load_live_board(symbols: Tuple[str, ...] = None) -> pd.DataFrame:
-    """Quick last price + day change for a fixed board of stocks & crypto."""
+    """Quick last price + session change for a fixed board of stocks & crypto."""
     if symbols is None:
         symbols = (
             "SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA",
             "BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD",
         )
-    symbols = tuple(symbols)
     rows = []
-
-    def _row_from_closes(sym: str, closes: pd.Series):
-        closes = closes.dropna()
-        if closes is None or len(closes) == 0:
-            return None
-        try:
-            px = float(closes.iloc[-1])
-            if not np.isfinite(px):
-                return None
-            prev = float(closes.iloc[-2]) if len(closes) > 1 else px
-            if not np.isfinite(prev) or prev == 0:
-                ch = 0.0
-            else:
-                ch = ((px / prev) - 1) * 100.0
-            if not np.isfinite(ch):
-                ch = 0.0
-            return {"Symbol": sym, "Price": px, "Chg%": float(ch)}
-        except Exception:
-            return None
-
-    # 1) Batch download — usually more reliable than per-ticker history()
-    try:
-        raw = yf.download(
-            list(symbols),
-            period="10d",
-            interval="1d",
-            group_by="ticker",
-            auto_adjust=True,
-            threads=True,
-            progress=False,
-        )
-        if raw is not None and not raw.empty:
-            if isinstance(raw.columns, pd.MultiIndex):
-                for sym in symbols:
-                    try:
-                        if sym in raw.columns.get_level_values(0):
-                            sub = raw[sym]
-                            col = "Close" if "Close" in sub.columns else ("close" if "close" in sub.columns else None)
-                            if col:
-                                r = _row_from_closes(sym, sub[col])
-                                if r:
-                                    rows.append(r)
-                    except Exception:
-                        continue
-            elif "Close" in raw.columns and len(symbols) == 1:
-                r = _row_from_closes(symbols[0], raw["Close"])
-                if r:
-                    rows.append(r)
-    except Exception:
-        pass
-
-    have = {r["Symbol"] for r in rows}
-
-    # 2) Per-ticker fallback for any missing symbols
     def _one(sym: str):
         try:
-            h = yf.Ticker(sym).history(period="1mo", interval="1d", auto_adjust=True)
-            if h is None or h.empty:
+            h = yf.Ticker(sym).history(period="5d", interval="1d", auto_adjust=True)
+            if h is None or h.empty or "Close" not in h.columns:
                 return None
-            col = "Close" if "Close" in h.columns else ("close" if "close" in h.columns else None)
-            if not col:
-                return None
-            return _row_from_closes(sym, h[col])
+            px = float(h["Close"].iloc[-1])
+            prev = float(h["Close"].iloc[-2]) if len(h) > 1 else px
+            ch = ((px / prev) - 1) * 100 if prev else 0.0
+            return {"Symbol": sym, "Price": px, "Chg%": ch}
         except Exception:
             return None
-
-    missing = [s for s in symbols if s not in have]
-    if missing:
-        workers = min(6, len(missing))
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            for fut in as_completed({ex.submit(_one, s): s for s in missing}):
-                try:
-                    r = fut.result()
-                    if r:
-                        rows.append(r)
-                except Exception:
-                    pass
-
+    workers = min(8, len(symbols))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for fut in as_completed({ex.submit(_one, s): s for s in symbols}):
+            try:
+                r = fut.result()
+                if r:
+                    rows.append(r)
+            except Exception:
+                pass
     if not rows:
-        # Do not cache a total miss for long — raise so Streamlit does not store empty success
-        raise RuntimeError("live board: no quotes returned")
-
+        return pd.DataFrame()
     df = pd.DataFrame(rows)
+    # Keep a stable display order
     order = {s: i for i, s in enumerate(symbols)}
     df["_ord"] = df["Symbol"].map(lambda x: order.get(x, 999))
     df = df.sort_values("_ord").drop(columns=["_ord"])
@@ -1047,26 +987,27 @@ def get_economic_calendar(days_ahead: int = 45) -> pd.DataFrame:
     Dates are known scheduled releases; confirm near the day on official sites.
     """
     # (date, event, typical_impact, notes)
-    # Verified against Fed Board FOMC calendar + BLS CPI/NFP schedules (as of Oct 2026).
-    # FOMC date = statement day (2nd day of meeting). Always confirm on federalreserve.gov / bls.gov.
     events = [
-        ("2026-10-28", "FOMC Rate Decision", "High", "Meeting Oct 27–28 · statement ~2pm ET"),
-        ("2026-11-06", "US Employment (NFP)", "High", "Jobs + unemployment · 8:30am ET"),
-        ("2026-11-10", "US CPI (Inflation)", "High", "October CPI · 8:30am ET"),
-        ("2026-12-04", "US Employment (NFP)", "High", "Jobs + unemployment · 8:30am ET"),
-        ("2026-12-09", "FOMC Rate Decision", "High", "Meeting Dec 8–9 · SEP · statement ~2pm ET"),
-        ("2026-12-10", "US CPI (Inflation)", "High", "November CPI · 8:30am ET"),
-        ("2027-01-13", "US CPI (Inflation)", "High", "December CPI · 8:30am ET"),
-        ("2027-01-27", "FOMC Rate Decision", "High", "Meeting Jan 26–27 · statement ~2pm ET"),
-        ("2027-02-11", "US CPI (Inflation)", "High", "January CPI · confirm on BLS"),
-        ("2027-03-10", "US CPI (Inflation)", "High", "February CPI · confirm on BLS"),
-        ("2027-03-17", "FOMC Rate Decision", "High", "Meeting Mar 16–17 · SEP · statement ~2pm ET"),
-        ("2027-04-28", "FOMC Rate Decision", "High", "Meeting Apr 27–28 · statement ~2pm ET"),
-        ("2027-06-09", "FOMC Rate Decision", "High", "Meeting Jun 8–9 · SEP · statement ~2pm ET"),
-        ("2027-07-28", "FOMC Rate Decision", "High", "Meeting Jul 27–28 · statement ~2pm ET"),
-        ("2027-09-15", "FOMC Rate Decision", "High", "Meeting Sep 14–15 · SEP · statement ~2pm ET"),
-        ("2027-10-27", "FOMC Rate Decision", "High", "Meeting Oct 26–27 · statement ~2pm ET"),
-        ("2027-12-08", "FOMC Rate Decision", "High", "Meeting Dec 7–8 · SEP · statement ~2pm ET"),
+        # 2026 remaining / sample rolling set — update yearly as needed
+        ("2026-10-29", "FOMC Rate Decision", "High", "Fed policy + press conference"),
+        ("2026-11-07", "US Employment (NFP)", "High", "Jobs + unemployment"),
+        ("2026-11-13", "US CPI (Inflation)", "High", "Consumer price index"),
+        ("2026-11-26", "US GDP (Advance)", "High", "Growth print"),
+        ("2026-12-10", "US CPI (Inflation)", "High", "Consumer price index"),
+        ("2026-12-17", "FOMC Rate Decision", "High", "Fed policy + press conference"),
+        ("2027-01-09", "US Employment (NFP)", "High", "Jobs + unemployment"),
+        ("2027-01-14", "US CPI (Inflation)", "High", "Consumer price index"),
+        ("2027-01-28", "FOMC Rate Decision", "High", "Fed policy + press conference"),
+        ("2027-02-12", "US CPI (Inflation)", "High", "Consumer price index"),
+        ("2027-03-06", "US Employment (NFP)", "High", "Jobs + unemployment"),
+        ("2027-03-11", "US CPI (Inflation)", "High", "Consumer price index"),
+        ("2027-03-18", "FOMC Rate Decision", "High", "Fed policy + press conference"),
+        ("2027-04-10", "US Employment (NFP)", "High", "Jobs + unemployment"),
+        ("2027-04-14", "US CPI (Inflation)", "High", "Consumer price index"),
+        ("2027-05-06", "FOMC Rate Decision", "High", "Fed policy + press conference"),
+        ("2027-05-13", "US CPI (Inflation)", "High", "Consumer price index"),
+        ("2027-06-05", "US Employment (NFP)", "High", "Jobs + unemployment"),
+        ("2027-06-17", "FOMC Rate Decision", "High", "Fed policy + press conference"),
     ]
     today = pd.Timestamp.now(tz="UTC").normalize()
     rows = []
@@ -3035,24 +2976,13 @@ if nav == "☀️ Briefing":
 
         # --- MARKET PULSE (attention hero) ---
         try:
-            try:
-                _pulse_board = load_live_board()
-            except Exception:
-                _pulse_board = pd.DataFrame()
-            st.session_state["_brief_board"] = _pulse_board if _pulse_board is not None and not _pulse_board.empty else None
+            _pulse_board = load_live_board()
+            st.session_state["_brief_board"] = _pulse_board
             _movers = []
             if _pulse_board is not None and not _pulse_board.empty and "Chg%" in _pulse_board.columns:
                 for _, _r in _pulse_board.iterrows():
                     try:
-                        _c = float(_r["Chg%"])
-                        _p = _r.get("Price")
-                        if _p is not None:
-                            _p = float(_p)
-                        if not np.isfinite(_c):
-                            continue
-                        if _p is not None and not np.isfinite(_p):
-                            _p = None
-                        _movers.append((str(_r["Symbol"]), _c, _p))
+                        _movers.append((str(_r["Symbol"]), float(_r["Chg%"]), _r.get("Price")))
                     except Exception:
                         continue
             # Include sidebar tickers from brief_data if available
@@ -3061,25 +2991,15 @@ if nav == "☀️ Briefing":
                     if _df is None or _df.empty or "close" not in _df.columns or len(_df) < 2:
                         continue
                     try:
-                        _a = float(_df["close"].iloc[-1])
-                        _b = float(_df["close"].iloc[-2])
-                        if not np.isfinite(_a) or not np.isfinite(_b) or _b == 0:
-                            continue
-                        _ch = (_a / _b - 1) * 100
-                        if not np.isfinite(_ch):
-                            continue
-                        _movers.append((_t, _ch, _a))
+                        _ch = (float(_df["close"].iloc[-1]) / float(_df["close"].iloc[-2]) - 1) * 100
+                        _movers.append((_t, _ch, float(_df["close"].iloc[-1])))
                     except Exception:
                         pass
-            # dedupe by symbol keep first; drop non-finite
+            # dedupe by symbol keep first
             _seen = set()
             _uniq = []
             for _s, _c, _p in _movers:
-                try:
-                    _c = float(_c)
-                except Exception:
-                    continue
-                if not np.isfinite(_c) or _s in _seen:
+                if _s in _seen:
                     continue
                 _seen.add(_s)
                 _uniq.append((_s, _c, _p))
@@ -3109,10 +3029,8 @@ if nav == "☀️ Briefing":
                     """,
                     unsafe_allow_html=True,
                 )
-            else:
-                st.caption("Market pulse unavailable — Yahoo quotes delayed. Board will retry on refresh.")
         except Exception:
-            st.caption("Market pulse unavailable — Yahoo quotes delayed. Board will retry on refresh.")
+            pass
 
         # --- Event banner (today / tomorrow / next 2 weeks) ---
         try:
@@ -3279,12 +3197,8 @@ if nav == "☀️ Briefing":
         st.caption("Major ETFs, mega-cap stocks, and crypto — last daily close & change (Yahoo, ~45s cache)")
         try:
             board = st.session_state.get("_brief_board")
-            if board is None or (isinstance(board, pd.DataFrame) and board.empty):
-                try:
-                    board = load_live_board()
-                    st.session_state["_brief_board"] = board
-                except Exception:
-                    board = pd.DataFrame()
+            if board is None:
+                board = load_live_board()
             if board is not None and not board.empty:
                 # Split stocks vs crypto for readability
                 crypto_syms = {"BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD"}
@@ -3296,14 +3210,14 @@ if nav == "☀️ Briefing":
                     if not stocks.empty:
                         disp = stocks.copy()
                         disp["Price"] = disp["Price"].map(lambda x: format_price(x))
-                        disp["Chg%"] = disp["Chg%"].map(lambda x: f"{float(x):+.2f}%" if pd.notna(x) and np.isfinite(float(x)) else "—")
+                        disp["Chg%"] = disp["Chg%"].map(lambda x: f"{x:+.2f}%")
                         st.dataframe(disp, use_container_width=True, hide_index=True)
                 with b2:
                     st.markdown("**Crypto**")
                     if not cryptos.empty:
                         disp = cryptos.copy()
                         disp["Price"] = disp["Price"].map(lambda x: format_price(x))
-                        disp["Chg%"] = disp["Chg%"].map(lambda x: f"{float(x):+.2f}%" if pd.notna(x) and np.isfinite(float(x)) else "—")
+                        disp["Chg%"] = disp["Chg%"].map(lambda x: f"{x:+.2f}%")
                         st.dataframe(disp, use_container_width=True, hide_index=True)
                     # Also surface user tickers live if different
                     if brief_data:
@@ -4119,8 +4033,8 @@ if nav == "🔮 Predictive":
                     st.metric("Recent Volatility", f"{prediction['recent_volatility_pct']:.2f}%")
                 
                 with score_col3:
-                    st.metric("Illustrative upside", f"${prediction['projected_upside']:,.2f}")
-                    st.metric("Illustrative downside", f"${prediction['projected_downside']:,.2f}")
+                    st.metric("Projected Upside", f"${prediction['projected_upside']:,.2f}")
+                    st.metric("Projected Downside", f"${prediction['projected_downside']:,.2f}")
                 
                 st.markdown("---")
                 
