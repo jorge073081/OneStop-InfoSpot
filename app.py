@@ -987,26 +987,27 @@ def get_economic_calendar(days_ahead: int = 45) -> pd.DataFrame:
     Dates are known scheduled releases; confirm near the day on official sites.
     """
     # (date, event, typical_impact, notes)
-    # Verified against Fed Board FOMC calendar + BLS CPI/NFP schedules (as of Oct 2026).
-    # FOMC date = statement day (2nd day of meeting). Always confirm on federalreserve.gov / bls.gov.
     events = [
-        ("2026-10-28", "FOMC Rate Decision", "High", "Meeting Oct 27–28 · statement ~2pm ET"),
-        ("2026-11-06", "US Employment (NFP)", "High", "Jobs + unemployment · 8:30am ET"),
-        ("2026-11-10", "US CPI (Inflation)", "High", "October CPI · 8:30am ET"),
-        ("2026-12-04", "US Employment (NFP)", "High", "Jobs + unemployment · 8:30am ET"),
-        ("2026-12-09", "FOMC Rate Decision", "High", "Meeting Dec 8–9 · SEP · statement ~2pm ET"),
-        ("2026-12-10", "US CPI (Inflation)", "High", "November CPI · 8:30am ET"),
-        ("2027-01-13", "US CPI (Inflation)", "High", "December CPI · 8:30am ET"),
-        ("2027-01-27", "FOMC Rate Decision", "High", "Meeting Jan 26–27 · statement ~2pm ET"),
-        ("2027-02-11", "US CPI (Inflation)", "High", "January CPI · confirm on BLS"),
-        ("2027-03-10", "US CPI (Inflation)", "High", "February CPI · confirm on BLS"),
-        ("2027-03-17", "FOMC Rate Decision", "High", "Meeting Mar 16–17 · SEP · statement ~2pm ET"),
-        ("2027-04-28", "FOMC Rate Decision", "High", "Meeting Apr 27–28 · statement ~2pm ET"),
-        ("2027-06-09", "FOMC Rate Decision", "High", "Meeting Jun 8–9 · SEP · statement ~2pm ET"),
-        ("2027-07-28", "FOMC Rate Decision", "High", "Meeting Jul 27–28 · statement ~2pm ET"),
-        ("2027-09-15", "FOMC Rate Decision", "High", "Meeting Sep 14–15 · SEP · statement ~2pm ET"),
-        ("2027-10-27", "FOMC Rate Decision", "High", "Meeting Oct 26–27 · statement ~2pm ET"),
-        ("2027-12-08", "FOMC Rate Decision", "High", "Meeting Dec 7–8 · SEP · statement ~2pm ET"),
+        # 2026 remaining / sample rolling set — update yearly as needed
+        ("2026-10-29", "FOMC Rate Decision", "High", "Fed policy + press conference"),
+        ("2026-11-07", "US Employment (NFP)", "High", "Jobs + unemployment"),
+        ("2026-11-13", "US CPI (Inflation)", "High", "Consumer price index"),
+        ("2026-11-26", "US GDP (Advance)", "High", "Growth print"),
+        ("2026-12-10", "US CPI (Inflation)", "High", "Consumer price index"),
+        ("2026-12-17", "FOMC Rate Decision", "High", "Fed policy + press conference"),
+        ("2027-01-09", "US Employment (NFP)", "High", "Jobs + unemployment"),
+        ("2027-01-14", "US CPI (Inflation)", "High", "Consumer price index"),
+        ("2027-01-28", "FOMC Rate Decision", "High", "Fed policy + press conference"),
+        ("2027-02-12", "US CPI (Inflation)", "High", "Consumer price index"),
+        ("2027-03-06", "US Employment (NFP)", "High", "Jobs + unemployment"),
+        ("2027-03-11", "US CPI (Inflation)", "High", "Consumer price index"),
+        ("2027-03-18", "FOMC Rate Decision", "High", "Fed policy + press conference"),
+        ("2027-04-10", "US Employment (NFP)", "High", "Jobs + unemployment"),
+        ("2027-04-14", "US CPI (Inflation)", "High", "Consumer price index"),
+        ("2027-05-06", "FOMC Rate Decision", "High", "Fed policy + press conference"),
+        ("2027-05-13", "US CPI (Inflation)", "High", "Consumer price index"),
+        ("2027-06-05", "US Employment (NFP)", "High", "Jobs + unemployment"),
+        ("2027-06-17", "FOMC Rate Decision", "High", "Fed policy + press conference"),
     ]
     today = pd.Timestamp.now(tz="UTC").normalize()
     rows = []
@@ -4032,8 +4033,8 @@ if nav == "🔮 Predictive":
                     st.metric("Recent Volatility", f"{prediction['recent_volatility_pct']:.2f}%")
                 
                 with score_col3:
-                    st.metric("Illustrative upside", f"${prediction['projected_upside']:,.2f}")
-                    st.metric("Illustrative downside", f"${prediction['projected_downside']:,.2f}")
+                    st.metric("Projected Upside", f"${prediction['projected_upside']:,.2f}")
+                    st.metric("Projected Downside", f"${prediction['projected_downside']:,.2f}")
                 
                 st.markdown("---")
                 
