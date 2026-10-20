@@ -2781,11 +2781,13 @@ def build_asset_chart(
         # Keep zoom/pan/drawn shapes when data refreshes
         uirevision=revision_key,
         newshape=dict(
-            line=dict(color="#00FFFF", width=2),
-            fillcolor="rgba(0, 255, 255, 0.12)",
+            line=dict(color="#22d3ee", width=2),
+            fillcolor="rgba(34, 211, 238, 0.15)",
             opacity=1,
+            drawdirection="diagonal",
             label=dict(texttemplate="", font=dict(size=11, color="#fafafa")),
         ),
+        activeshape=dict(fillcolor="rgba(59, 130, 246, 0.25)", line=dict(color="#3b82f6", width=2)),
     )
     # Equal-width x-axis: no time gaps, chart always fills the panel
     n = len(h_data)
@@ -3674,24 +3676,50 @@ if nav == "📈 Chart":
                 if last_px is not None:
                     st.metric(f"{m_tgt} last", format_price(last_px))
 
+                # Drawing tools help + clear (Streamlit rebuilds figures; erase is modebar-based)
+                st.caption(
+                    "✏️ **Draw:** use toolbar icons (line · freehand · closed shape · circle · rectangle). "
+                    "**Erase one:** click the eraser icon, then click the shape. "
+                    "**Move:** drag a shape. Prefer **Analyze** mode so auto-refresh doesn’t wipe drawings."
+                )
+                _clr1, _clr2 = st.columns([1, 4])
+                with _clr1:
+                    if st.button("Clear drawings", key=f"clear_draw_{m_tgt}"):
+                        st.session_state[f"_draw_rev_{m_tgt}"] = (
+                            int(st.session_state.get(f"_draw_rev_{m_tgt}", 0)) + 1
+                        )
+                        st.rerun()
+                with _clr2:
+                    st.caption("Clears all drawn shapes on this chart (keeps pan/zoom on next interaction).")
+
+                _draw_rev = int(st.session_state.get(f"_draw_rev_{m_tgt}", 0))
+                # Rebuild revision so Plotly drops client-side shapes after Clear
+                fig.update_layout(uirevision=f"asset-view-{m_tgt}-d{_draw_rev}")
+
                 st.plotly_chart(
                     fig,
                     use_container_width=True,
                     config={
                         "displaylogo": False,
+                        "displayModeBar": True,
                         "scrollZoom": True,
                         "editable": True,
-                        "edits": {"shapePosition": True, "annotationPosition": True},
+                        "edits": {
+                            "shapePosition": True,
+                            "annotationPosition": True,
+                            "annotationText": True,
+                        },
                         "modeBarButtonsToAdd": [
                             "drawline",
                             "drawopenpath",
+                            "drawclosedpath",
                             "drawcircle",
                             "drawrect",
                             "eraseshape",
                         ],
                         "modeBarButtonsToRemove": ["lasso2d", "select2d"],
                     },
-                    key=f"asset_chart_draw_{m_tgt}",
+                    key=f"asset_chart_draw_{m_tgt}_{_draw_rev}",
                 )
 
                 if show_vol_profile:
