@@ -657,6 +657,152 @@ def dataframe_to_csv_bytes(df: pd.DataFrame) -> bytes:
     return buf.getvalue().encode()
 
 
+
+# ============================================================
+# MARKET REGIME DETECTION
+# ============================================================
+
+def calculate_market_regime(
+    btc_hist=None,
+    fear_greed_value=None,
+    funding_rate=None,
+    vix_value=None,
+):
+    """
+    Dedicated Market Regime engine.
+    Labels: Capitulation / Potential Bottom | Bear Trap | Early Bull |
+            Mid Bull | Late Bull / Euphoria | Distribution / Topping
+    """
+    score = 0
+    reasons = []
+
+    # 1. Fear & Greed
+    if fear_greed_value is not None:
+        try:
+            fg = int(fear_greed_value)
+        except Exception:
+            fg = None
+        if fg is not None:
+            if fg <= 18:
+                score -= 28
+                reasons.append(f"Fear & Greed at extreme fear ({fg}) → Capitulation zone")
+            elif fg <= 30:
+                score -= 14
+                reasons.append(f"Fear & Greed low ({fg})")
+            elif fg >= 82:
+                score += 28
+                reasons.append(f"Fear & Greed at extreme greed ({fg}) → Euphoria risk")
+            elif fg >= 68:
+                score += 14
+                reasons.append(f"Fear & Greed elevated ({fg})")
+
+    # 2. BTC vs 200 SMA + Drawdown
+    if btc_hist is not None and hasattr(btc_hist, "columns") and "close" in btc_hist.columns and len(btc_hist) > 200:
+        close = btc_hist["close"].dropna()
+        if len(close) > 200:
+            sma200 = close.rolling(200).mean()
+            current = float(close.iloc[-1])
+            sma_val = sma200.iloc[-1]
+            if pd.notna(sma_val) and float(sma_val) > 0:
+                sma = float(sma_val)
+                dist = (current / sma - 1) * 100
+                if current > sma * 1.18:
+                    score += 16
+                    reasons.append(f"BTC extended above 200 SMA (+{dist:.1f}%)")
+                elif current > sma:
+                    score += 8
+                    reasons.append("BTC above 200 SMA (bullish structure)")
+                elif current < sma * 0.82:
+                    score -= 22
+                    reasons.append(f"BTC deeply below 200 SMA ({dist:.1f}%)")
+                else:
+                    score -= 9
+                    reasons.append("BTC below 200 SMA")
+
+            recent_high = float(close.tail(180).max())
+            if recent_high > 0:
+                dd = (current / recent_high - 1) * 100
+                if dd <= -50:
+                    score -= 20
+                    reasons.append(f"Very deep drawdown from recent high ({dd:.1f}%)")
+                elif dd <= -30:
+                    score -= 11
+                    reasons.append(f"Significant drawdown ({dd:.1f}%)")
+                elif dd >= -8:
+                    score += 9
+                    reasons.append("Price trading near recent highs")
+
+    # 3. Funding Rate
+    if funding_rate is not None:
+        try:
+            fr = float(funding_rate)
+            if fr >= 0.06:
+                score += 13
+                reasons.append(f"Very high funding ({fr:.4f}%) → crowded leverage")
+            elif fr >= 0.03:
+                score += 7
+                reasons.append(f"Elevated funding ({fr:.4f}%)")
+            elif fr <= -0.025:
+                score -= 11
+                reasons.append(f"Negative funding ({fr:.4f}%) → shorts dominant")
+        except Exception:
+            pass
+
+    # 4. VIX
+    if vix_value is not None:
+        try:
+            vx = float(vix_value)
+            if vx >= 32:
+                score -= 13
+                reasons.append(f"High VIX ({vx:.1f}) → risk-off / fear")
+            elif vx <= 14:
+                score += 9
+                reasons.append(f"Low VIX ({vx:.1f}) → complacency")
+        except Exception:
+            pass
+
+    # Final Regime
+    if score <= -32:
+        regime = "Capitulation / Potential Bottom"
+        color = "#22c55e"
+        conviction = "High"
+        bias = "High-conviction buying zone potential"
+    elif score <= -16:
+        regime = "Bear Market / Possible Bear Trap"
+        color = "#eab308"
+        conviction = "Medium"
+        bias = "Caution – bounce risk or continuation"
+    elif score <= 6:
+        regime = "Early Bull / Recovery"
+        color = "#3b82f6"
+        conviction = "Medium"
+        bias = "Constructive but not confirmed"
+    elif score <= 22:
+        regime = "Mid Bull"
+        color = "#22c55e"
+        conviction = "Medium-High"
+        bias = "Healthy trend continuation favored"
+    elif score <= 36:
+        regime = "Late Bull / Approaching Euphoria"
+        color = "#f97316"
+        conviction = "Medium"
+        bias = "Late cycle – reduce aggression"
+    else:
+        regime = "Euphoria / Distribution Risk"
+        color = "#ef4444"
+        conviction = "High"
+        bias = "High-conviction caution / take-profit zone"
+
+    return {
+        "regime": regime,
+        "score": score,
+        "conviction": conviction,
+        "color": color,
+        "bias": bias,
+        "reasons": reasons,
+    }
+
+
 # ============================================================
 # FRED MACRO DATA (optional free API key from https://fred.stlouisfed.org/docs/api/api_key.html)
 # ============================================================
@@ -2973,6 +3119,7 @@ _view_map = {
     "fred": "🌐 Macro/FRED",
     "news": "📰 LiveMacro/Crypto/StockNews",
     "predictive": "🔮 Predictive",
+    "regime": "🌊 Market Regime",
     "tools": "🛠️ Tools",
 }
 try:
@@ -2984,7 +3131,7 @@ except Exception:
 
 nav = st.radio(
     "Navigate",
-    ["☀️ Briefing", "📈 Chart", "🔀 Compare/Analysis", "⚡ Crypto", "🌐 Macro/FRED", "📰 LiveMacro/Crypto/StockNews", "🔮 Predictive", "🛠️ Tools"],
+    ["☀️ Briefing", "📈 Chart", "🔀 Compare/Analysis", "⚡ Crypto", "🌐 Macro/FRED", "📰 LiveMacro/Crypto/StockNews", "🔮 Predictive", "🌊 Market Regime", "🛠️ Tools"],
     horizontal=True,
     label_visibility="collapsed",
     key="main_nav",
@@ -4400,6 +4547,96 @@ if nav == "🛠️ Tools":
                     )
             except Exception:
                 pass
+
+
+
+
+# ============================================================
+# MARKET REGIME TAB
+# ============================================================
+if nav == "🌊 Market Regime":
+    st.subheader("🌊 Market Regime Detection")
+    st.caption("Dedicated cycle analysis — Bottom / Bear Trap / Mid-Bull / Euphoria with conviction scoring.")
+
+    fng_v, fng_c = get_fear_greed()
+    # get_fear_greed may return strings in this app; normalize
+    try:
+        fng_num = int(float(str(fng_v).split("/")[0].strip())) if fng_v is not None else None
+    except Exception:
+        try:
+            fng_num = int(fng_v)
+        except Exception:
+            fng_num = None
+
+    btc_hist = None
+    funding = None
+    vix_val = None
+
+    try:
+        btc_raw = load_ticker_data(("BTC-USD",), "1d", 400, "2y", False)
+        btc_hist = btc_raw.get("BTC-USD")
+    except Exception:
+        pass
+
+    try:
+        fut = get_futures_metrics("BTC-USD", current_price=0.0)
+        funding = fut.get("funding_rate")
+    except Exception:
+        pass
+
+    try:
+        macro = load_macro_data()
+        if macro and "VIX" in macro and macro["VIX"] is not None and not macro["VIX"].empty:
+            vix_val = float(macro["VIX"]["close"].iloc[-1])
+    except Exception:
+        pass
+
+    result = calculate_market_regime(
+        btc_hist=btc_hist,
+        fear_greed_value=fng_num,
+        funding_rate=funding,
+        vix_value=vix_val,
+    )
+
+    st.markdown(
+        f"""
+        <div style="background:#12161c; border:2px solid {result['color']};
+                    border-radius:14px; padding:24px; margin:1rem 0 1.5rem 0;">
+            <div style="font-size:0.8rem; letter-spacing:0.1em; color:#94a3b8; text-transform:uppercase;">
+                Current Market Regime
+            </div>
+            <div style="font-size:2.1rem; font-weight:700; color:{result['color']}; margin:0.3rem 0;">
+                {result['regime']}
+            </div>
+            <div style="font-size:1.05rem; color:#e2e8f0; margin-bottom:0.6rem;">
+                {result['bias']}
+            </div>
+            <div style="color:#94a3b8; font-size:0.95rem;">
+                Score: <b>{result['score']:+.0f}</b> &nbsp;|&nbsp; Conviction: <b>{result['conviction']}</b>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Fear & Greed", f"{fng_num}/100" if fng_num is not None else "—", str(fng_c)[:24] if fng_c else "")
+    col2.metric("Funding Rate", f"{funding:.4f}%" if funding is not None else "—")
+    col3.metric("VIX", f"{vix_val:.1f}" if vix_val is not None else "—")
+
+    st.markdown("### Key Drivers")
+    if result["reasons"]:
+        for r in result["reasons"]:
+            st.write(f"• {r}")
+    else:
+        st.info("Not enough data points to generate detailed reasons right now.")
+
+    st.markdown("---")
+    st.info(
+        "This regime engine combines Fear & Greed, BTC structure vs 200 SMA, "
+        "drawdown depth, funding rates, and VIX. It is a decision-support tool only — "
+        "not financial advice."
+    )
 
 
 
