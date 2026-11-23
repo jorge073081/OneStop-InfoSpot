@@ -803,6 +803,119 @@ def calculate_market_regime(
     }
 
 
+
+def compute_liquidity_backdrop(fred_api_key: str = ""):
+    """
+    Build a simple liquidity backdrop from free FRED series.
+    Returns dict with series + composite label for charting.
+    """
+    out = {
+        "m2": None,
+        "real_yield": None,
+        "fed_funds": None,
+        "label": "Unknown",
+        "color": "#94a3b8",
+        "score": 0,
+        "notes": [],
+    }
+    if not fred_api_key or not str(fred_api_key).strip():
+        out["notes"].append("Add FRED API key in secrets for full liquidity series")
+        return out
+
+    try:
+        m2 = load_fred_series(fred_api_key, "M2SL", limit=60)
+        real = load_fred_series(fred_api_key, "DFII10", limit=60)
+        fed = load_fred_series(fred_api_key, "FEDFUNDS", limit=60)
+    except Exception:
+        m2 = real = fed = None
+
+    score = 0
+    notes = []
+
+    # M2 YoY growth
+    m2_yoy = None
+    if m2 is not None and len(m2) >= 13:
+        try:
+            m2 = m2.sort_index()
+            yoy = m2["value"].pct_change(12) * 100
+            m2_yoy = float(yoy.iloc[-1])
+            out["m2"] = m2.copy()
+            out["m2"]["yoy"] = yoy
+            if m2_yoy >= 6:
+                score += 12
+                notes.append(f"M2 YoY strong ({m2_yoy:.1f}%)")
+            elif m2_yoy >= 2:
+                score += 5
+                notes.append(f"M2 YoY positive ({m2_yoy:.1f}%)")
+            elif m2_yoy <= -1:
+                score -= 12
+                notes.append(f"M2 contracting ({m2_yoy:.1f}%)")
+            else:
+                score -= 4
+                notes.append(f"M2 soft ({m2_yoy:.1f}%)")
+        except Exception:
+            pass
+
+    # Real yield level + direction
+    if real is not None and len(real) >= 3:
+        try:
+            real = real.sort_index()
+            out["real_yield"] = real
+            last = float(real["value"].iloc[-1])
+            prev = float(real["value"].iloc[-3])
+            if last <= 0.5:
+                score += 10
+                notes.append(f"Real yield low ({last:.2f}%)")
+            elif last >= 2.0:
+                score -= 10
+                notes.append(f"Real yield elevated ({last:.2f}%)")
+            else:
+                notes.append(f"Real yield moderate ({last:.2f}%)")
+            if last < prev - 0.15:
+                score += 6
+                notes.append("Real yields falling")
+            elif last > prev + 0.15:
+                score -= 6
+                notes.append("Real yields rising")
+        except Exception:
+            pass
+
+    # Fed funds direction (simple)
+    if fed is not None and len(fed) >= 4:
+        try:
+            fed = fed.sort_index()
+            out["fed_funds"] = fed
+            last = float(fed["value"].iloc[-1])
+            prev = float(fed["value"].iloc[-4])
+            if last < prev - 0.25:
+                score += 8
+                notes.append(f"Fed Funds cutting ({last:.2f}%)")
+            elif last > prev + 0.25:
+                score -= 8
+                notes.append(f"Fed Funds hiking ({last:.2f}%)")
+            else:
+                notes.append(f"Fed Funds steady ({last:.2f}%)")
+        except Exception:
+            pass
+
+    if score >= 15:
+        label, color = "Expanding Liquidity", "#22c55e"
+    elif score >= 5:
+        label, color = "Supportive / Neutral-Easy", "#3b82f6"
+    elif score <= -15:
+        label, color = "Contracting Liquidity", "#ef4444"
+    elif score <= -5:
+        label, color = "Tightening", "#f97316"
+    else:
+        label, color = "Neutral / Mixed", "#eab308"
+
+    out["score"] = score
+    out["label"] = label
+    out["color"] = color
+    out["notes"] = notes
+    return out
+
+
 # ============================================================
 # FRED MACRO DATA (optional free API key from https://fred.stlouisfed.org/docs/api/api_key.html)
 # ============================================================
@@ -3248,6 +3361,75 @@ if nav == "☀️ Briefing":
                     st.write(f"• {r}")
             else:
                 st.caption("Not enough data for detailed drivers right now.")
+
+
+
+        # --- Liquidity Regime Visual ---
+        st.markdown("### 💧 Liquidity Backdrop")
+        liq = compute_liquidity_backdrop(fred_api_key if "fred_api_key" in dir() else "")
+        st.markdown(
+            f"""
+            <div style="background:#12161c; border:1px solid {liq['color']};
+                        border-radius:12px; padding:14px 16px; margin-bottom:0.75rem;">
+                <div style="font-size:0.75rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.08em;">
+                    Macro Liquidity Regime
+                </div>
+                <div style="font-size:1.35rem; font-weight:700; color:{liq['color']}; margin-top:0.2rem;">
+                    {liq['label']}
+                </div>
+                <div style="color:#94a3b8; font-size:0.85rem; margin-top:0.25rem;">
+                    Score: {liq['score']:+.0f}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if liq["notes"]:
+            st.caption(" · ".join(liq["notes"]))
+
+        # Charts: M2 YoY + Real Yield
+        try:
+            import plotly.graph_objects as go
+            from plotly.subplots import make_subplots
+            has_m2 = liq.get("m2") is not None and "yoy" in liq["m2"].columns
+            has_ry = liq.get("real_yield") is not None
+            if has_m2 or has_ry:
+                fig_liq = make_subplots(
+                    rows=2 if (has_m2 and has_ry) else 1,
+                    cols=1,
+                    shared_xaxes=True,
+                    subplot_titles=[t for t, ok in [("M2 Money Supply YoY %", has_m2), ("10Y Real Yield %", has_ry)] if ok],
+                    vertical_spacing=0.12,
+                )
+                row = 1
+                if has_m2:
+                    m2df = liq["m2"].dropna(subset=["yoy"]).tail(48)
+                    fig_liq.add_trace(
+                        go.Scatter(x=m2df.index, y=m2df["yoy"], name="M2 YoY", line=dict(color="#3b82f6", width=2)),
+                        row=row, col=1,
+                    )
+                    fig_liq.add_hline(y=0, line_dash="dash", line_color="#64748b", row=row, col=1)
+                    row += 1
+                if has_ry:
+                    rydf = liq["real_yield"].tail(48)
+                    fig_liq.add_trace(
+                        go.Scatter(x=rydf.index, y=rydf["value"], name="10Y Real Yield", line=dict(color="#f59e0b", width=2)),
+                        row=row, col=1,
+                    )
+                fig_liq.update_layout(
+                    height=320 if (has_m2 and has_ry) else 220,
+                    template="plotly_dark",
+                    paper_bgcolor="#0b0e11",
+                    plot_bgcolor="#0b0e11",
+                    margin=dict(l=40, r=20, t=40, b=30),
+                    showlegend=False,
+                    font=dict(family="IBM Plex Sans, sans-serif", size=11),
+                )
+                st.plotly_chart(fig_liq, use_container_width=True)
+            else:
+                st.caption("Liquidity charts need a FRED API key in Streamlit secrets (`fred_api_key`).")
+        except Exception as _e:
+            st.caption("Liquidity chart unavailable this session.")
 
 
         # --- MARKET PULSE (attention hero) ---
