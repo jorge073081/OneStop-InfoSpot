@@ -3119,7 +3119,6 @@ _view_map = {
     "fred": "🌐 Macro/FRED",
     "news": "📰 LiveMacro/Crypto/StockNews",
     "predictive": "🔮 Predictive",
-    "regime": "🌊 Market Regime",
     "tools": "🛠️ Tools",
 }
 try:
@@ -3131,7 +3130,7 @@ except Exception:
 
 nav = st.radio(
     "Navigate",
-    ["☀️ Briefing", "📈 Chart", "🔀 Compare/Analysis", "⚡ Crypto", "🌐 Macro/FRED", "📰 LiveMacro/Crypto/StockNews", "🔮 Predictive", "🌊 Market Regime", "🛠️ Tools"],
+    ["☀️ Briefing", "📈 Chart", "🔀 Compare/Analysis", "⚡ Crypto", "🌐 Macro/FRED", "📰 LiveMacro/Crypto/StockNews", "🔮 Predictive", "🛠️ Tools"],
     horizontal=True,
     label_visibility="collapsed",
     key="main_nav",
@@ -3180,22 +3179,76 @@ if nav == "☀️ Briefing":
             brief_data = get_shared_market_data(tkrs, interval, lookback_bars, period, is_6h)
 
     if True:  # keep indentation structure for rest of briefing body
-        # --- Regime one-liner ---
-        regime = "Mixed"
+        # --- Dedicated Market Regime (Morning Brief only) ---
+        st.markdown("### 🌊 Market Regime")
+        fng_num = None
         try:
-            fv = float(fng_v)
-            vix = float(macro_snap["VIX"]["close"].iloc[-1]) if "VIX" in macro_snap and not macro_snap["VIX"].empty else None
-            if fv <= 25 and (vix is None or vix >= 20):
-                regime = "Stress / Fear — historically better for patient entries"
-            elif fv >= 75:
-                regime = "Greed — late-cycle risk; favor discipline over FOMO"
-            elif vix is not None and vix >= 25:
-                regime = "Elevated volatility — size down, wait for clarity"
-            else:
-                regime = "Neutral / mixed — follow your levels"
+            fng_num = int(float(str(fng_v).split("/")[0].strip()))
+        except Exception:
+            try:
+                fng_num = int(fng_v)
+            except Exception:
+                fng_num = None
+
+        btc_hist = None
+        funding = None
+        vix_val = None
+        try:
+            btc_raw = load_ticker_data(("BTC-USD",), "1d", 400, "2y", False)
+            btc_hist = btc_raw.get("BTC-USD")
         except Exception:
             pass
-        st.markdown(f"**Regime read:** {regime}")
+        try:
+            fut = get_futures_metrics("BTC-USD", current_price=0.0)
+            funding = fut.get("funding_rate")
+        except Exception:
+            pass
+        try:
+            if macro_snap and "VIX" in macro_snap and macro_snap["VIX"] is not None and not macro_snap["VIX"].empty:
+                vix_val = float(macro_snap["VIX"]["close"].iloc[-1])
+        except Exception:
+            pass
+
+        result = calculate_market_regime(
+            btc_hist=btc_hist,
+            fear_greed_value=fng_num,
+            funding_rate=funding,
+            vix_value=vix_val,
+        )
+
+        st.markdown(
+            f"""
+            <div style="background:#12161c; border:2px solid {result['color']};
+                        border-radius:14px; padding:20px; margin:0.5rem 0 1rem 0;">
+                <div style="font-size:0.75rem; letter-spacing:0.1em; color:#94a3b8; text-transform:uppercase;">
+                    Current Market Regime
+                </div>
+                <div style="font-size:1.85rem; font-weight:700; color:{result['color']}; margin:0.25rem 0;">
+                    {result['regime']}
+                </div>
+                <div style="font-size:1rem; color:#e2e8f0; margin-bottom:0.45rem;">
+                    {result['bias']}
+                </div>
+                <div style="color:#94a3b8; font-size:0.9rem;">
+                    Score: <b>{result['score']:+.0f}</b> &nbsp;|&nbsp; Conviction: <b>{result['conviction']}</b>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        r1, r2, r3 = st.columns(3)
+        r1.metric("Fear & Greed", f"{fng_num}/100" if fng_num is not None else "—", str(fng_c)[:24] if fng_c else "")
+        r2.metric("Funding Rate", f"{funding:.4f}%" if funding is not None else "—")
+        r3.metric("VIX", f"{vix_val:.1f}" if vix_val is not None else "—")
+
+        with st.expander("Key regime drivers"):
+            if result["reasons"]:
+                for r in result["reasons"]:
+                    st.write(f"• {r}")
+            else:
+                st.caption("Not enough data for detailed drivers right now.")
+
 
         # --- MARKET PULSE (attention hero) ---
         try:
@@ -4548,95 +4601,6 @@ if nav == "🛠️ Tools":
             except Exception:
                 pass
 
-
-
-
-# ============================================================
-# MARKET REGIME TAB
-# ============================================================
-if nav == "🌊 Market Regime":
-    st.subheader("🌊 Market Regime Detection")
-    st.caption("Dedicated cycle analysis — Bottom / Bear Trap / Mid-Bull / Euphoria with conviction scoring.")
-
-    fng_v, fng_c = get_fear_greed()
-    # get_fear_greed may return strings in this app; normalize
-    try:
-        fng_num = int(float(str(fng_v).split("/")[0].strip())) if fng_v is not None else None
-    except Exception:
-        try:
-            fng_num = int(fng_v)
-        except Exception:
-            fng_num = None
-
-    btc_hist = None
-    funding = None
-    vix_val = None
-
-    try:
-        btc_raw = load_ticker_data(("BTC-USD",), "1d", 400, "2y", False)
-        btc_hist = btc_raw.get("BTC-USD")
-    except Exception:
-        pass
-
-    try:
-        fut = get_futures_metrics("BTC-USD", current_price=0.0)
-        funding = fut.get("funding_rate")
-    except Exception:
-        pass
-
-    try:
-        macro = load_macro_data()
-        if macro and "VIX" in macro and macro["VIX"] is not None and not macro["VIX"].empty:
-            vix_val = float(macro["VIX"]["close"].iloc[-1])
-    except Exception:
-        pass
-
-    result = calculate_market_regime(
-        btc_hist=btc_hist,
-        fear_greed_value=fng_num,
-        funding_rate=funding,
-        vix_value=vix_val,
-    )
-
-    st.markdown(
-        f"""
-        <div style="background:#12161c; border:2px solid {result['color']};
-                    border-radius:14px; padding:24px; margin:1rem 0 1.5rem 0;">
-            <div style="font-size:0.8rem; letter-spacing:0.1em; color:#94a3b8; text-transform:uppercase;">
-                Current Market Regime
-            </div>
-            <div style="font-size:2.1rem; font-weight:700; color:{result['color']}; margin:0.3rem 0;">
-                {result['regime']}
-            </div>
-            <div style="font-size:1.05rem; color:#e2e8f0; margin-bottom:0.6rem;">
-                {result['bias']}
-            </div>
-            <div style="color:#94a3b8; font-size:0.95rem;">
-                Score: <b>{result['score']:+.0f}</b> &nbsp;|&nbsp; Conviction: <b>{result['conviction']}</b>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Fear & Greed", f"{fng_num}/100" if fng_num is not None else "—", str(fng_c)[:24] if fng_c else "")
-    col2.metric("Funding Rate", f"{funding:.4f}%" if funding is not None else "—")
-    col3.metric("VIX", f"{vix_val:.1f}" if vix_val is not None else "—")
-
-    st.markdown("### Key Drivers")
-    if result["reasons"]:
-        for r in result["reasons"]:
-            st.write(f"• {r}")
-    else:
-        st.info("Not enough data points to generate detailed reasons right now.")
-
-    st.markdown("---")
-    st.info(
-        "This regime engine combines Fear & Greed, BTC structure vs 200 SMA, "
-        "drawdown depth, funding rates, and VIX. It is a decision-support tool only — "
-        "not financial advice."
-    )
 
 
 
