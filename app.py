@@ -11,6 +11,7 @@ from streamlit_autorefresh import st_autorefresh
 import feedparser
 import io
 import time
+import re
 import uuid
 from typing import Dict, List, Optional, Tuple, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1057,6 +1058,187 @@ def compute_liquidity_backdrop(fred_api_key: str = ""):
     out["label"] = label
     out["color"] = color
     out["notes"] = notes
+    return out
+
+
+
+
+# ============================================================
+# DISCOVER (CoinGecko free tier) + rate limiting
+# ============================================================
+
+def _cg_headers():
+    """Optional demo key from secrets; works without key at lower rate limits."""
+    key = ""
+    try:
+        key = (st.secrets.get("COINGECKO_API_KEY", "") or st.secrets.get("coingecko_api_key", "") or "").strip()
+    except Exception:
+        pass
+    return {"x-cg-demo-api-key": key} if key else {}
+
+
+def _cg_rate_limit(min_interval: float = 1.35):
+    """
+    Process-wide polite spacing between CoinGecko calls.
+    Uses st.session_state when available; falls back to time-only gate.
+    """
+    now = time.time()
+    try:
+        last = float(st.session_state.get("_cg_last_call_ts", 0) or 0)
+        wait = min_interval - (now - last)
+        if wait > 0:
+            time.sleep(wait)
+        st.session_state["_cg_last_call_ts"] = time.time()
+    except Exception:
+        # session_state may be unavailable in some cache worker contexts
+        time.sleep(min_interval * 0.25)
+
+
+def _cg_get(url: str, params: dict = None, timeout: int = 20):
+    """Single gated GET for CoinGecko."""
+    _cg_rate_limit(1.35)
+    try:
+        r = requests.get(
+            url,
+            params=params or {},
+            headers={**HEADERS, **_cg_headers()},
+            timeout=timeout,
+        )
+        return r
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=360, show_spinner="Loading trending…")
+def cg_trending():
+    r = _cg_get("https://api.coingecko.com/api/v3/search/trending")
+    if r is None or r.status_code != 200:
+        return []
+    try:
+        coins = (r.json() or {}).get("coins") or []
+    except Exception:
+        return []
+    rows = []
+    for c in coins:
+        item = c.get("item") or {}
+        rows.append({
+            "Name": item.get("name"),
+            "Symbol": (item.get("symbol") or "").upper(),
+            "Rank": item.get("market_cap_rank"),
+            "Score": item.get("score"),
+            "ID": item.get("id"),
+        })
+    return rows
+
+
+@st.cache_data(ttl=360, show_spinner="Loading market rankings…")
+def cg_markets(order: str = "market_cap_desc", page: int = 1, per_page: int = 50):
+    r = _cg_get(
+        "https://api.coingecko.com/api/v3/coins/markets",
+        params={
+            "vs_currency": "usd",
+            "order": order,
+            "per_page": per_page,
+            "page": page,
+            "sparkline": False,
+            "price_change_percentage": "1h,24h,7d",
+        },
+    )
+    if r is None or r.status_code != 200:
+        return []
+    try:
+        return r.json() or []
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=600, show_spinner="Loading categories…")
+def cg_categories():
+    r = _cg_get("https://api.coingecko.com/api/v3/coins/categories")
+    if r is None or r.status_code != 200:
+        return []
+    try:
+        data = r.json() or []
+    except Exception:
+        return []
+    rows = []
+    for c in data:
+        rows.append({
+            "Name": c.get("name"),
+            "ID": c.get("id"),
+            "Mcap": c.get("market_cap"),
+            "Mcap Change 24h": c.get("market_cap_change_24h"),
+            "Volume 24h": c.get("volume_24h"),
+            "Top 3": ", ".join([t for t in (c.get("top_3_coins_id") or [])[:3]]),
+        })
+    return rows
+
+
+def _fmt_mcap(x):
+    try:
+        x = float(x or 0)
+    except Exception:
+        return "—"
+    if x >= 1e9:
+        return f"${x/1e9:.2f}B"
+    if x >= 1e6:
+        return f"${x/1e6:.2f}M"
+    if x >= 1e3:
+        return f"${x/1e3:.1f}K"
+    return f"${x:.0f}"
+
+
+def _fmt_pct(x):
+    try:
+        if x is None or (isinstance(x, float) and np.isnan(x)):
+            return "—"
+        return f"{float(x):+.2f}%"
+    except Exception:
+        return "—"
+
+
+def _narrative_keywords(category_name: str):
+    n = (category_name or "").lower()
+    # map category labels to headline keywords
+    mapping = {
+        "ai": ["ai", "artificial intelligence", "gpt", "machine learning", "llm"],
+        "meme": ["meme", "dogecoin", "shiba", "pepe", "bonk"],
+        "depin": ["depin", "helium", "iot", "render", "network"],
+        "rwa": ["rwa", "real world", "tokenized", "treasury"],
+        "layer": ["layer 2", "l2", "rollup", "optimism", "arbitrum", "base"],
+        "defi": ["defi", "dex", "lending", "aave", "uniswap", "yield"],
+        "game": ["game", "gaming", "nft", "play"],
+        "solana": ["solana", "sol "],
+        "ethereum": ["ethereum", "eth "],
+        "bitcoin": ["bitcoin", "btc", "ordinal"],
+    }
+    keys = []
+    for k, words in mapping.items():
+        if k in n:
+            keys.extend(words)
+    if not keys:
+        # fallback: significant tokens from name
+        keys = [w for w in re.findall(r"[a-z0-9]+", n) if len(w) > 3][:4]
+    return keys
+
+
+def match_news_to_categories(categories, news_items, limit_per_cat: int = 2):
+    """Attach a few headlines to top narrative categories."""
+    news_items = news_items or []
+    out = []
+    for cat in categories:
+        name = cat.get("Name") or ""
+        keys = _narrative_keywords(name)
+        hits = []
+        for art in news_items:
+            title = (art.get("title") or "")
+            summary = (art.get("summary") or "")
+            blob = f"{title} {summary}".lower()
+            if any(k in blob for k in keys):
+                hits.append(art)
+            if len(hits) >= limit_per_cat:
+                break
+        out.append({**cat, "headlines": hits})
     return out
 
 
@@ -3376,6 +3558,7 @@ _view_map = {
     "fred": "🌐 Macro/FRED",
     "news": "📰 LiveMacro/Crypto/StockNews",
     "predictive": "🔮 Predictive",
+    "discover": "🔎 Discover",
     "tools": "🛠️ Tools",
 }
 try:
@@ -3387,7 +3570,7 @@ except Exception:
 
 nav = st.radio(
     "Navigate",
-    ["☀️ Briefing", "📈 Chart", "🔀 Compare/Analysis", "⚡ Crypto", "🌐 Macro/FRED", "📰 LiveMacro/Crypto/StockNews", "🔮 Predictive", "🛠️ Tools"],
+    ["☀️ Briefing", "📈 Chart", "🔀 Compare/Analysis", "⚡ Crypto", "🔎 Discover", "🌐 Macro/FRED", "📰 LiveMacro/Crypto/StockNews", "🔮 Predictive", "🛠️ Tools"],
     horizontal=True,
     label_visibility="collapsed",
     key="main_nav",
@@ -4912,6 +5095,236 @@ if nav == "🛠️ Tools":
             except Exception:
                 pass
 
+
+
+
+
+
+# ============================================================
+# DISCOVER TAB (Phase 1 + Phase 2 — rate-limited CoinGecko)
+# ============================================================
+if nav == "🔎 Discover":
+    st.subheader("🔎 Discover")
+    st.caption(
+        "Free discovery · trending · rankings · low-cap · narratives. "
+        "CoinGecko calls are cached and spaced (~1.3s) to avoid spam / rate limits."
+    )
+
+    sub = st.radio(
+        "View",
+        ["Trending", "Gainers / Losers", "Low-cap band", "Narratives"],
+        horizontal=True,
+        key="discover_sub",
+    )
+
+    if sub == "Trending":
+        rows = cg_trending()
+        if not rows:
+            st.warning("Trending unavailable (rate limit or network). Wait a minute, or add `COINGECKO_API_KEY` in secrets.")
+        else:
+            df = pd.DataFrame(rows)
+            st.dataframe(df[["Rank", "Name", "Symbol", "Score"]], use_container_width=True, hide_index=True)
+            st.markdown("##### Open")
+            for r in rows[:8]:
+                cid = r.get("ID") or ""
+                sym = r.get("Symbol") or ""
+                name = r.get("Name") or ""
+                st.markdown(
+                    f"**{name} ({sym})** · "
+                    f"[CoinGecko](https://www.coingecko.com/en/coins/{cid}) · "
+                    f"[TradingView](https://www.tradingview.com/chart/?symbol={sym}USD)"
+                )
+
+    elif sub == "Gainers / Losers":
+        order = st.selectbox(
+            "Universe sort",
+            ["volume_desc", "market_cap_desc"],
+            format_func=lambda x: "By volume" if x == "volume_desc" else "By market cap",
+            key="discover_gl_order",
+        )
+        markets = cg_markets(order=order, page=1, per_page=80)
+        if not markets:
+            st.warning("Markets unavailable. Prefer a free CoinGecko demo key in secrets as `COINGECKO_API_KEY`.")
+        else:
+            rows = []
+            for c in markets:
+                rows.append({
+                    "Name": c.get("name"),
+                    "Symbol": (c.get("symbol") or "").upper(),
+                    "Price": c.get("current_price"),
+                    "24h %": c.get("price_change_percentage_24h"),
+                    "7d %": c.get("price_change_percentage_7d_in_currency"),
+                    "Volume": c.get("total_volume"),
+                    "Market Cap": c.get("market_cap"),
+                    "ID": c.get("id"),
+                })
+            df = pd.DataFrame(rows).dropna(subset=["24h %"])
+            gainers = df.sort_values("24h %", ascending=False).head(15)
+            losers = df.sort_values("24h %", ascending=True).head(15)
+
+            def _prep(d):
+                d = d.copy()
+                d["Price"] = d["Price"].map(lambda x: format_price(x) if x is not None else "—")
+                d["24h %"] = d["24h %"].map(_fmt_pct)
+                d["7d %"] = d["7d %"].map(_fmt_pct)
+                d["Volume"] = d["Volume"].map(_fmt_mcap)
+                d["Market Cap"] = d["Market Cap"].map(_fmt_mcap)
+                return d[["Name", "Symbol", "Price", "24h %", "7d %", "Volume", "Market Cap"]]
+
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("##### Top gainers (24h)")
+                st.dataframe(_prep(gainers), use_container_width=True, hide_index=True)
+            with c2:
+                st.markdown("##### Top losers (24h)")
+                st.dataframe(_prep(losers), use_container_width=True, hide_index=True)
+
+    elif sub == "Low-cap band":
+        st.markdown("##### Low-cap band filter")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            min_m = st.number_input("Min mcap ($M)", min_value=0.1, max_value=500.0, value=5.0, step=0.5, key="disc_min_m")
+        with c2:
+            max_m = st.number_input("Max mcap ($M)", min_value=1.0, max_value=2000.0, value=150.0, step=5.0, key="disc_max_m")
+        with c3:
+            min_vol = st.number_input("Min 24h volume ($)", min_value=0, value=300000, step=50000, key="disc_min_vol")
+
+        max_pages = st.slider("Max API pages (rate-limit safety)", 1, 4, 3, key="disc_pages")
+        min_mcap = min_m * 1_000_000
+        max_mcap = max_m * 1_000_000
+
+        if st.button("Scan low-caps", type="primary", key="disc_scan"):
+            all_rows = []
+            progress = st.progress(0)
+            status = st.empty()
+            for i, page in enumerate(range(1, max_pages + 1), start=1):
+                status.caption(f"Fetching page {page}/{max_pages} (rate-limited)…")
+                batch = cg_markets(order="market_cap_asc", page=page, per_page=50)
+                progress.progress(i / max_pages)
+                if not batch:
+                    break
+                all_rows.extend(batch)
+                # extra spacing beyond cache gate for multi-page scans
+                time.sleep(1.0)
+
+            status.empty()
+            progress.empty()
+
+            hits = []
+            for c in all_rows:
+                mcap = c.get("market_cap") or c.get("fully_diluted_valuation") or 0
+                vol = c.get("total_volume") or 0
+                try:
+                    mcap = float(mcap)
+                    vol = float(vol)
+                except Exception:
+                    continue
+                if mcap < min_mcap or mcap > max_mcap:
+                    continue
+                if vol < min_vol:
+                    continue
+                hits.append({
+                    "Name": c.get("name"),
+                    "Symbol": (c.get("symbol") or "").upper(),
+                    "Price": c.get("current_price"),
+                    "24h %": c.get("price_change_percentage_24h"),
+                    "7d %": c.get("price_change_percentage_7d_in_currency"),
+                    "Volume": vol,
+                    "Market Cap": mcap,
+                    "ID": c.get("id"),
+                })
+
+            if not hits:
+                st.warning("No names in this band. Widen range, lower min volume, or increase pages carefully.")
+            else:
+                df = pd.DataFrame(hits).sort_values("Volume", ascending=False).head(25)
+                show = df.copy()
+                show["Price"] = show["Price"].map(lambda x: format_price(x) if x is not None else "—")
+                show["24h %"] = show["24h %"].map(_fmt_pct)
+                show["7d %"] = show["7d %"].map(_fmt_pct)
+                show["Volume"] = show["Volume"].map(_fmt_mcap)
+                show["Market Cap"] = show["Market Cap"].map(_fmt_mcap)
+                st.success(f"Found {len(df)} names")
+                st.dataframe(
+                    show[["Name", "Symbol", "Price", "24h %", "7d %", "Volume", "Market Cap"]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                st.markdown("##### Links")
+                for _, r in df.head(12).iterrows():
+                    st.markdown(
+                        f"**{r['Name']} ({r['Symbol']})** · "
+                        f"[CoinGecko](https://www.coingecko.com/en/coins/{r['ID']}) · "
+                        f"[TradingView](https://www.tradingview.com/chart/?symbol={r['Symbol']}USD)"
+                    )
+        else:
+            st.info("Scan is manual on purpose (protects free API limits). Max 4 pages per scan.")
+
+    else:  # Narratives
+        st.markdown("##### Narrative heat (categories)")
+        st.caption("Top categories by 24h market-cap change + matching headlines from your news feeds.")
+        cats = cg_categories()
+        if not cats:
+            st.warning("Categories unavailable right now (rate limit or network).")
+        else:
+            cdf = pd.DataFrame(cats)
+            if "Mcap Change 24h" in cdf.columns:
+                cdf = cdf.dropna(subset=["Mcap Change 24h"])
+                top = cdf.sort_values("Mcap Change 24h", ascending=False).head(8)
+                bottom = cdf.sort_values("Mcap Change 24h", ascending=True).head(5)
+            else:
+                top = cdf.head(8)
+                bottom = cdf.tail(5)
+
+            show_top = top.copy()
+            show_top["Mcap"] = show_top["Mcap"].map(_fmt_mcap)
+            show_top["Volume 24h"] = show_top["Volume 24h"].map(_fmt_mcap)
+            show_top["Mcap Change 24h"] = show_top["Mcap Change 24h"].map(_fmt_pct)
+            st.markdown("**Strongest categories (24h)**")
+            st.dataframe(
+                show_top[["Name", "Mcap Change 24h", "Mcap", "Volume 24h"]],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            # News match (reuse existing free news helpers)
+            news_items = []
+            try:
+                news_items = get_crypto_news(cache_buster="discover-narratives", max_items=30) or []
+            except Exception:
+                try:
+                    news_items = get_market_news(cache_buster="discover-narratives", max_items=30) or []
+                except Exception:
+                    news_items = []
+
+            enriched = match_news_to_categories(top.to_dict("records"), news_items, limit_per_cat=2)
+            st.markdown("##### Narratives + headlines")
+            for cat in enriched:
+                ch = cat.get("Mcap Change 24h")
+                ch_s = _fmt_pct(ch)
+                with st.expander(f"{cat.get('Name')} · {ch_s}"):
+                    headlines = cat.get("headlines") or []
+                    if not headlines:
+                        st.caption("No matching headlines in the current free news pull.")
+                    else:
+                        for art in headlines:
+                            title = art.get("title") or "Untitled"
+                            link = art.get("link") or ""
+                            src = art.get("source") or ""
+                            if link:
+                                st.markdown(f"- [{title}]({link}) · _{src}_")
+                            else:
+                                st.markdown(f"- {title} · _{src}_")
+
+            st.markdown("**Softest categories (24h)**")
+            show_bot = bottom.copy()
+            show_bot["Mcap"] = show_bot["Mcap"].map(_fmt_mcap)
+            show_bot["Mcap Change 24h"] = show_bot["Mcap Change 24h"].map(_fmt_pct)
+            st.dataframe(
+                show_bot[["Name", "Mcap Change 24h", "Mcap"]],
+                use_container_width=True,
+                hide_index=True,
+            )
 
 
 
