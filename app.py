@@ -3364,9 +3364,10 @@ if nav == "☀️ Briefing":
 
 
 
-        # --- Liquidity Regime Visual ---
+        # --- Liquidity Regime Visual (box only) ---
         st.markdown("### 💧 Liquidity Backdrop")
-        liq = compute_liquidity_backdrop(fred_api_key if "fred_api_key" in dir() else "")
+        _fred = fred_api_key if "fred_api_key" in dir() else ""
+        liq = compute_liquidity_backdrop(_fred)
         st.markdown(
             f"""
             <div style="background:#12161c; border:1px solid {liq['color']};
@@ -3384,53 +3385,6 @@ if nav == "☀️ Briefing":
             """,
             unsafe_allow_html=True,
         )
-        if liq["notes"]:
-            st.caption(" · ".join(liq["notes"]))
-
-        # Charts: M2 YoY + Real Yield
-        try:
-            import plotly.graph_objects as go
-            from plotly.subplots import make_subplots
-            has_m2 = liq.get("m2") is not None and "yoy" in liq["m2"].columns
-            has_ry = liq.get("real_yield") is not None
-            if has_m2 or has_ry:
-                fig_liq = make_subplots(
-                    rows=2 if (has_m2 and has_ry) else 1,
-                    cols=1,
-                    shared_xaxes=True,
-                    subplot_titles=[t for t, ok in [("M2 Money Supply YoY %", has_m2), ("10Y Real Yield %", has_ry)] if ok],
-                    vertical_spacing=0.12,
-                )
-                row = 1
-                if has_m2:
-                    m2df = liq["m2"].dropna(subset=["yoy"]).tail(48)
-                    fig_liq.add_trace(
-                        go.Scatter(x=m2df.index, y=m2df["yoy"], name="M2 YoY", line=dict(color="#3b82f6", width=2)),
-                        row=row, col=1,
-                    )
-                    fig_liq.add_hline(y=0, line_dash="dash", line_color="#64748b", row=row, col=1)
-                    row += 1
-                if has_ry:
-                    rydf = liq["real_yield"].tail(48)
-                    fig_liq.add_trace(
-                        go.Scatter(x=rydf.index, y=rydf["value"], name="10Y Real Yield", line=dict(color="#f59e0b", width=2)),
-                        row=row, col=1,
-                    )
-                fig_liq.update_layout(
-                    height=320 if (has_m2 and has_ry) else 220,
-                    template="plotly_dark",
-                    paper_bgcolor="#0b0e11",
-                    plot_bgcolor="#0b0e11",
-                    margin=dict(l=40, r=20, t=40, b=30),
-                    showlegend=False,
-                    font=dict(family="IBM Plex Sans, sans-serif", size=11),
-                )
-                st.plotly_chart(fig_liq, use_container_width=True)
-            else:
-                st.caption("Liquidity charts need a FRED API key in Streamlit secrets (`fred_api_key`).")
-        except Exception as _e:
-            st.caption("Liquidity chart unavailable this session.")
-
 
         # --- MARKET PULSE (attention hero) ---
         try:
