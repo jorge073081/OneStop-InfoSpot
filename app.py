@@ -1109,7 +1109,7 @@ def _cg_get(url: str, params: dict = None, timeout: int = 20):
         return None
 
 
-@st.cache_data(ttl=900, show_spinner="Loading trending…")
+@st.cache_data(ttl=1800, show_spinner="Loading trending…")
 def cg_trending():
     r = _cg_get("https://api.coingecko.com/api/v3/search/trending")
     if r is None or r.status_code != 200:
@@ -1131,7 +1131,7 @@ def cg_trending():
     return rows
 
 
-@st.cache_data(ttl=900, show_spinner="Loading market rankings…")
+@st.cache_data(ttl=1800, show_spinner="Loading market rankings…")
 def cg_markets(order: str = "market_cap_desc", page: int = 1, per_page: int = 50):
     r = _cg_get(
         "https://api.coingecko.com/api/v3/coins/markets",
@@ -1152,7 +1152,7 @@ def cg_markets(order: str = "market_cap_desc", page: int = 1, per_page: int = 50
         return []
 
 
-@st.cache_data(ttl=1200, show_spinner="Loading categories…")
+@st.cache_data(ttl=3600, show_spinner="Loading categories…")
 def cg_categories():
     r = _cg_get("https://api.coingecko.com/api/v3/coins/categories")
     if r is None or r.status_code != 200:
@@ -1172,6 +1172,82 @@ def cg_categories():
             "Top 3": ", ".join([t for t in (c.get("top_3_coins_id") or [])[:3]]),
         })
     return rows
+
+
+
+
+@st.cache_data(ttl=1800, show_spinner="Refreshing shared Discover snapshot…")
+def cg_discover_snapshot():
+    """
+    One shared snapshot for all users (~30 min).
+    Heavy traffic reads this cache instead of each user hitting CoinGecko.
+    """
+    out = {
+        "trending": [],
+        "markets_volume": [],
+        "markets_mcap": [],
+        "categories": [],
+        "error": None,
+        "ts": None,
+    }
+    try:
+        out["trending"] = cg_trending() or []
+        out["markets_volume"] = cg_markets(order="volume_desc", page=1, per_page=80) or []
+        out["markets_mcap"] = cg_markets(order="market_cap_desc", page=1, per_page=80) or []
+        out["categories"] = cg_categories() or []
+        out["ts"] = time.time()
+    except Exception as e:
+        out["error"] = str(e)
+        out["ts"] = time.time()
+    return out
+
+
+@st.cache_data(ttl=86400, show_spinner="Refreshing daily low-cap snapshot…")
+def cg_lowcap_daily_snapshot():
+    """
+    Fixed daily low-cap universe (max once per 24h for all users).
+    Broad band: $1M–$300M mcap, min volume $100k, 3 pages.
+    UI filters are applied in-memory afterward (no extra API calls).
+    """
+    min_mcap = 1_000_000
+    max_mcap = 300_000_000
+    min_vol = 100_000
+    max_pages = 3
+
+    all_rows = []
+    for page in range(1, max_pages + 1):
+        batch = cg_markets(order="market_cap_asc", page=page, per_page=50)
+        if not batch:
+            break
+        all_rows.extend(batch)
+        time.sleep(1.0)
+
+    hits = []
+    for c in all_rows:
+        mcap = c.get("market_cap") or c.get("fully_diluted_valuation") or 0
+        vol = c.get("total_volume") or 0
+        try:
+            mcap = float(mcap)
+            vol = float(vol)
+        except Exception:
+            continue
+        if mcap < min_mcap or mcap > max_mcap:
+            continue
+        if vol < min_vol:
+            continue
+        hits.append({
+            "Name": c.get("name"),
+            "Symbol": (c.get("symbol") or "").upper(),
+            "Price": c.get("current_price"),
+            "24h %": c.get("price_change_percentage_24h"),
+            "7d %": c.get("price_change_percentage_7d_in_currency"),
+            "Volume": vol,
+            "Market Cap": mcap,
+            "ID": c.get("id"),
+        })
+
+    hits = sorted(hits, key=lambda x: x.get("Volume") or 0, reverse=True)[:80]
+    return hits
 
 
 def _fmt_mcap(x):
@@ -5107,7 +5183,7 @@ if nav == "🔎 Discover":
     st.subheader("🔎 Discover")
     st.caption(
         "Free discovery · trending · rankings · low-cap · narratives. "
-        "CoinGecko calls are cached longer (trending/markets ~15 min, categories ~20 min) and spaced (~1.3s) to protect shared API quota."
+        "Built for traffic: one shared Discover snapshot (~30 min), categories up to ~60 min, low-cap once daily. Users share cache instead of spamming CoinGecko."
     )
 
     sub = st.radio(
@@ -5117,10 +5193,18 @@ if nav == "🔎 Discover":
         key="discover_sub",
     )
 
+    # Shared snapshot (all users / ~30 min) — protects API key under traffic
+    snap = cg_discover_snapshot()
+    if snap.get("ts"):
+        age_m = max(0, int((time.time() - float(snap["ts"])) // 60))
+        st.caption(f"Shared Discover snapshot · ~{age_m} min old · refreshes about every 30 min for everyone")
+    if snap.get("error"):
+        st.caption("Snapshot built with partial errors; showing last successful pieces when available.")
+
     if sub == "Trending":
-        rows = cg_trending()
+        rows = snap.get("trending") or cg_trending()
         if not rows:
-            st.warning("Trending unavailable (rate limit or network). Wait a minute, or add `COINGECKO_API_KEY` in secrets.")
+            st.warning("Trending unavailable (cache empty / rate limit). It will retry on the next shared refresh.")
         else:
             df = pd.DataFrame(rows)
             st.dataframe(df[["Rank", "Name", "Symbol", "Score"]], use_container_width=True, hide_index=True)
@@ -5142,9 +5226,12 @@ if nav == "🔎 Discover":
             format_func=lambda x: "By volume" if x == "volume_desc" else "By market cap",
             key="discover_gl_order",
         )
-        markets = cg_markets(order=order, page=1, per_page=80)
+        if order == "volume_desc":
+            markets = snap.get("markets_volume") or cg_markets(order=order, page=1, per_page=80)
+        else:
+            markets = snap.get("markets_mcap") or cg_markets(order=order, page=1, per_page=80)
         if not markets:
-            st.warning("Markets unavailable. Prefer a free CoinGecko demo key in secrets as `COINGECKO_API_KEY`.")
+            st.warning("Markets unavailable from shared snapshot. Will refill on next refresh cycle.")
         else:
             rows = []
             for c in markets:
@@ -5180,7 +5267,11 @@ if nav == "🔎 Discover":
                 st.dataframe(_prep(losers), use_container_width=True, hide_index=True)
 
     elif sub == "Low-cap band":
-        st.markdown("##### Low-cap band filter")
+        st.markdown("##### Low-cap snapshot (once per day)")
+        st.caption(
+            "Network scan runs **at most once every 24 hours** (shared cache). "
+            "Sliders only filter today's snapshot in memory — they do **not** call CoinGecko again."
+        )
         c1, c2, c3 = st.columns(3)
         with c1:
             min_m = st.number_input("Min mcap ($M)", min_value=0.1, max_value=500.0, value=5.0, step=0.5, key="disc_min_m")
@@ -5189,83 +5280,53 @@ if nav == "🔎 Discover":
         with c3:
             min_vol = st.number_input("Min 24h volume ($)", min_value=0, value=300000, step=50000, key="disc_min_vol")
 
-        max_pages = st.slider("Max API pages (rate-limit safety)", 1, 4, 3, key="disc_pages")
-        min_mcap = min_m * 1_000_000
-        max_mcap = max_m * 1_000_000
+        raw = cg_lowcap_daily_snapshot()
+        min_mcap = float(min_m) * 1_000_000
+        max_mcap = float(max_m) * 1_000_000
+        min_vol_f = float(min_vol)
 
-        if st.button("Scan low-caps", type="primary", key="disc_scan"):
-            all_rows = []
-            progress = st.progress(0)
-            status = st.empty()
-            for i, page in enumerate(range(1, max_pages + 1), start=1):
-                status.caption(f"Fetching page {page}/{max_pages} (rate-limited)…")
-                batch = cg_markets(order="market_cap_asc", page=page, per_page=50)
-                progress.progress(i / max_pages)
-                if not batch:
-                    break
-                all_rows.extend(batch)
-                # extra spacing beyond cache gate for multi-page scans
-                time.sleep(1.0)
+        hits = []
+        for c in raw or []:
+            mcap = float(c.get("Market Cap") or 0)
+            vol = float(c.get("Volume") or 0)
+            if mcap < min_mcap or mcap > max_mcap:
+                continue
+            if vol < min_vol_f:
+                continue
+            hits.append(c)
 
-            status.empty()
-            progress.empty()
-
-            hits = []
-            for c in all_rows:
-                mcap = c.get("market_cap") or c.get("fully_diluted_valuation") or 0
-                vol = c.get("total_volume") or 0
-                try:
-                    mcap = float(mcap)
-                    vol = float(vol)
-                except Exception:
-                    continue
-                if mcap < min_mcap or mcap > max_mcap:
-                    continue
-                if vol < min_vol:
-                    continue
-                hits.append({
-                    "Name": c.get("name"),
-                    "Symbol": (c.get("symbol") or "").upper(),
-                    "Price": c.get("current_price"),
-                    "24h %": c.get("price_change_percentage_24h"),
-                    "7d %": c.get("price_change_percentage_7d_in_currency"),
-                    "Volume": vol,
-                    "Market Cap": mcap,
-                    "ID": c.get("id"),
-                })
-
-            if not hits:
-                st.warning("No names in this band. Widen range, lower min volume, or increase pages carefully.")
-            else:
-                df = pd.DataFrame(hits).sort_values("Volume", ascending=False).head(25)
-                show = df.copy()
-                show["Price"] = show["Price"].map(lambda x: format_price(x) if x is not None else "—")
-                show["24h %"] = show["24h %"].map(_fmt_pct)
-                show["7d %"] = show["7d %"].map(_fmt_pct)
-                show["Volume"] = show["Volume"].map(_fmt_mcap)
-                show["Market Cap"] = show["Market Cap"].map(_fmt_mcap)
-                st.success(f"Found {len(df)} names")
-                st.dataframe(
-                    show[["Name", "Symbol", "Price", "24h %", "7d %", "Volume", "Market Cap"]],
-                    use_container_width=True,
-                    hide_index=True,
-                )
-                st.markdown("##### Links")
-                for _, r in df.head(12).iterrows():
-                    st.markdown(
-                        f"**{r['Name']} ({r['Symbol']})** · "
-                        f"[CoinGecko](https://www.coingecko.com/en/coins/{r['ID']}) · "
-                        f"[TradingView](https://www.tradingview.com/chart/?symbol={r['Symbol']}USD)"
-                    )
+        if not raw:
+            st.warning("Daily snapshot unavailable (API or first-load issue). Try again later.")
+        elif not hits:
+            st.warning("No names match these filters inside today's snapshot. Widen the band.")
         else:
-            st.info("Scan is manual on purpose (protects free API limits). Max 4 pages per scan.")
+            df = pd.DataFrame(hits).head(25)
+            show = df.copy()
+            show["Price"] = show["Price"].map(lambda x: format_price(x) if x is not None else "—")
+            show["24h %"] = show["24h %"].map(_fmt_pct)
+            show["7d %"] = show["7d %"].map(_fmt_pct)
+            show["Volume"] = show["Volume"].map(_fmt_mcap)
+            show["Market Cap"] = show["Market Cap"].map(_fmt_mcap)
+            st.success(f"{len(df)} names (filtered from daily snapshot)")
+            st.dataframe(
+                show[["Name", "Symbol", "Price", "24h %", "7d %", "Volume", "Market Cap"]],
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.markdown("##### Links")
+            for _, r in df.head(12).iterrows():
+                st.markdown(
+                    f"**{r['Name']} ({r['Symbol']})** · "
+                    f"[CoinGecko](https://www.coingecko.com/en/coins/{r['ID']}) · "
+                    f"[TradingView](https://www.tradingview.com/chart/?symbol={r['Symbol']}USD)"
+                )
 
     else:  # Narratives
         st.markdown("##### Narrative heat (categories)")
         st.caption("Top categories by 24h market-cap change + matching headlines from your news feeds.")
-        cats = cg_categories()
+        cats = snap.get("categories") or cg_categories()
         if not cats:
-            st.warning("Categories unavailable right now (rate limit or network).")
+            st.warning("Categories unavailable from shared snapshot. Will refill on next refresh cycle.")
         else:
             cdf = pd.DataFrame(cats)
             if "Mcap Change 24h" in cdf.columns:
