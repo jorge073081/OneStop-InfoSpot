@@ -804,6 +804,150 @@ def calculate_market_regime(
 
 
 
+
+def generate_chart_auto_brief(ticker: str, hist) -> dict:
+    """
+    Automatic chart analysis brief for one ticker.
+    Uses price vs SMAs, RSI, structure, drawdown, recent returns.
+    """
+    out = {
+        "bias": "Neutral",
+        "color": "#94a3b8",
+        "headline": "Insufficient data for analysis.",
+        "bullets": [],
+        "detail": "",
+    }
+    if hist is None or getattr(hist, "empty", True) or "close" not in hist.columns:
+        return out
+
+    df = hist.copy()
+    # Ensure indicators if missing
+    try:
+        if "sma50" not in df.columns or "rsi" not in df.columns:
+            df = add_indicators(df)
+    except Exception:
+        pass
+
+    close = df["close"].dropna()
+    if len(close) < 20:
+        return out
+
+    last = float(close.iloc[-1])
+    prev = float(close.iloc[-2]) if len(close) > 1 else last
+    chg_1 = (last / prev - 1) * 100 if prev else 0.0
+
+    def _ret(n):
+        if len(close) > n:
+            return (last / float(close.iloc[-n - 1]) - 1) * 100
+        return None
+
+    r7 = _ret(7)
+    r30 = _ret(min(30, len(close) - 2))
+
+    sma50 = float(df["sma50"].iloc[-1]) if "sma50" in df.columns and pd.notna(df["sma50"].iloc[-1]) else None
+    sma200 = float(df["sma200"].iloc[-1]) if "sma200" in df.columns and pd.notna(df["sma200"].iloc[-1]) else None
+    rsi = float(df["rsi"].iloc[-1]) if "rsi" in df.columns and pd.notna(df["rsi"].iloc[-1]) else None
+
+    high_30 = float(close.tail(30).max())
+    low_30 = float(close.tail(30).min())
+    dist_high = (last / high_30 - 1) * 100 if high_30 else 0
+    dist_low = (last / low_30 - 1) * 100 if low_30 else 0
+
+    # Simple structure: compare recent swing vs prior
+    tail = close.tail(20)
+    higher_high = float(tail.iloc[-1]) > float(tail.iloc[-10]) and float(tail.max()) >= float(close.tail(40).max()) * 0.98
+    lower_low = float(tail.min()) <= float(close.tail(40).min()) * 1.02 and float(tail.iloc[-1]) < float(tail.iloc[-10])
+
+    score = 0
+    bullets = []
+
+    # Trend
+    if sma50 and sma200:
+        if last > sma50 and last > sma200 and sma50 >= sma200:
+            score += 2
+            bullets.append(f"Uptrend structure: price above 50 & 200 SMA (50 ≥ 200).")
+        elif last > sma50 and last > sma200:
+            score += 1
+            bullets.append("Price above both 50 and 200 SMA.")
+        elif last < sma50 and last < sma200 and sma50 <= sma200:
+            score -= 2
+            bullets.append("Downtrend structure: price below 50 & 200 SMA (50 ≤ 200).")
+        elif last < sma50 and last < sma200:
+            score -= 1
+            bullets.append("Price below both 50 and 200 SMA.")
+        else:
+            bullets.append("Mixed vs moving averages (possible transition).")
+    elif sma50:
+        if last > sma50:
+            score += 1
+            bullets.append(f"Price above 50 SMA ({sma50:.4g}).")
+        else:
+            score -= 1
+            bullets.append(f"Price below 50 SMA ({sma50:.4g}).")
+
+    # RSI
+    if rsi is not None:
+        if rsi >= 70:
+            score -= 1
+            bullets.append(f"RSI elevated at {rsi:.0f} (overbought risk).")
+        elif rsi <= 30:
+            score += 1
+            bullets.append(f"RSI low at {rsi:.0f} (oversold / washout zone).")
+        elif 45 <= rsi <= 65:
+            score += 1
+            bullets.append(f"RSI healthy-neutral at {rsi:.0f}.")
+        else:
+            bullets.append(f"RSI at {rsi:.0f}.")
+
+    # Position in range
+    if dist_high >= -3:
+        bullets.append(f"Near 30-day high ({dist_high:+.1f}%).")
+        if score > 0:
+            score += 0  # extended but trend ok
+        else:
+            score -= 0
+    elif dist_high <= -15:
+        bullets.append(f"Well off 30-day high ({dist_high:+.1f}%).")
+    if dist_low <= 5 and dist_low >= 0:
+        bullets.append(f"Close to 30-day low (+{dist_low:.1f}% off low).")
+
+    if r7 is not None:
+        bullets.append(f"7d change: {r7:+.1f}%.")
+    if r30 is not None:
+        bullets.append(f"~30d change: {r30:+.1f}%.")
+
+    if higher_high and score >= 0:
+        bullets.append("Recent price action favors higher highs.")
+    if lower_low and score <= 0:
+        bullets.append("Recent price action shows lower-low pressure.")
+
+    # Bias
+    if score >= 3:
+        bias, color = "Bullish", "#22c55e"
+        headline = f"{ticker}: constructive uptrend. Dip-buys favored over chase only if risk is defined."
+    elif score == 2:
+        bias, color = "Constructive", "#22c55e"
+        headline = f"{ticker}: mild bullish bias. Structure supportive; watch RSI and nearby highs."
+    elif score <= -3:
+        bias, color = "Bearish", "#ef4444"
+        headline = f"{ticker}: defensive posture. Rallies may fail until MAs are reclaimed."
+    elif score <= -1:
+        bias, color = "Cautious", "#f97316"
+        headline = f"{ticker}: soft / mixed-to-weak. Prefer confirmation before adding risk."
+    else:
+        bias, color = "Neutral", "#eab308"
+        headline = f"{ticker}: no strong edge. Wait for clearer trend or level reaction."
+
+    out.update({
+        "bias": bias,
+        "color": color,
+        "headline": headline,
+        "bullets": bullets[:8],
+        "detail": f"Last {format_price(last)} ({chg_1:+.2f}% session-to-session)",
+    })
+    return out
+
+
 def compute_liquidity_backdrop(fred_api_key: str = ""):
     """
     Build a simple liquidity backdrop from free FRED series.
@@ -3964,8 +4108,39 @@ if nav == "📈 Chart":
                 asset_options,
                 key="target_asset_select",
             )
+            auto_chart_brief = st.checkbox(
+                "Auto chart analysis",
+                value=False,
+                key="auto_chart_brief_toggle",
+                help="When on, shows a brief technical summary for the selected ticker only.",
+            )
             if m_tgt and m_tgt in data:
                 h_data = data[m_tgt].copy()
+                if auto_chart_brief:
+                    brief = generate_chart_auto_brief(m_tgt, h_data)
+                    st.markdown(
+                        f"""
+                        <div style="background:#12161c; border:1px solid {brief['color']};
+                                    border-radius:12px; padding:14px 16px; margin:0.6rem 0 1rem 0;">
+                            <div style="font-size:0.72rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.08em;">
+                                Auto Chart Brief · {m_tgt}
+                            </div>
+                            <div style="font-size:1.25rem; font-weight:700; color:{brief['color']}; margin:0.2rem 0;">
+                                {brief['bias']}
+                            </div>
+                            <div style="color:#e2e8f0; font-size:0.95rem; margin-bottom:0.4rem;">
+                                {brief['headline']}
+                            </div>
+                            <div style="color:#94a3b8; font-size:0.85rem;">{brief['detail']}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    if brief["bullets"]:
+                        with st.expander("Analysis details", expanded=True):
+                            for b in brief["bullets"]:
+                                st.write(f"• {b}")
+                            st.caption("Automated summary from live/historical OHLCV + indicators. Not financial advice.")
                 if show_long_baseline:
                     long_avg = get_long_term_avg(m_tgt)
                     if long_avg is not None:
