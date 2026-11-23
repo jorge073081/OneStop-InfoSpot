@@ -1109,7 +1109,7 @@ def _cg_get(url: str, params: dict = None, timeout: int = 20):
         return None
 
 
-@st.cache_data(ttl=360, show_spinner="Loading trending…")
+@st.cache_data(ttl=900, show_spinner="Loading trending…")
 def cg_trending():
     r = _cg_get("https://api.coingecko.com/api/v3/search/trending")
     if r is None or r.status_code != 200:
@@ -1131,7 +1131,7 @@ def cg_trending():
     return rows
 
 
-@st.cache_data(ttl=360, show_spinner="Loading market rankings…")
+@st.cache_data(ttl=900, show_spinner="Loading market rankings…")
 def cg_markets(order: str = "market_cap_desc", page: int = 1, per_page: int = 50):
     r = _cg_get(
         "https://api.coingecko.com/api/v3/coins/markets",
@@ -1152,7 +1152,7 @@ def cg_markets(order: str = "market_cap_desc", page: int = 1, per_page: int = 50
         return []
 
 
-@st.cache_data(ttl=600, show_spinner="Loading categories…")
+@st.cache_data(ttl=1200, show_spinner="Loading categories…")
 def cg_categories():
     r = _cg_get("https://api.coingecko.com/api/v3/coins/categories")
     if r is None or r.status_code != 200:
@@ -5107,7 +5107,7 @@ if nav == "🔎 Discover":
     st.subheader("🔎 Discover")
     st.caption(
         "Free discovery · trending · rankings · low-cap · narratives. "
-        "CoinGecko calls are cached and spaced (~1.3s) to avoid spam / rate limits."
+        "CoinGecko calls are cached longer (trending/markets ~15 min, categories ~20 min) and spaced (~1.3s) to protect shared API quota."
     )
 
     sub = st.radio(
