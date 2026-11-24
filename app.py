@@ -3254,6 +3254,49 @@ def build_volume_by_price_chart(h_data: pd.DataFrame, bins: int = 28) -> Optiona
 # ============================================================
 # 5. CHART BUILDING ENGINE
 # ============================================================
+
+def compute_swing_fib_levels(df: pd.DataFrame, lookback: int = 60):
+    """
+    Fibonacci levels from the most recent swing high/low in `lookback` bars.
+    Returns dict with high, low, direction, levels {ratio: price}, or None.
+    """
+    if df is None or df.empty or "high" not in df.columns or "low" not in df.columns:
+        return None
+    window = df.tail(max(20, min(lookback, len(df)))).copy()
+    if len(window) < 10:
+        return None
+    hi_idx = window["high"].idxmax()
+    lo_idx = window["low"].idxmin()
+    hi = float(window.loc[hi_idx, "high"])
+    lo = float(window.loc[lo_idx, "low"])
+    if hi <= lo or not np.isfinite(hi) or not np.isfinite(lo):
+        return None
+    # Direction: if low occurred after high → downswing (retracement up); else upswing
+    try:
+        pos_hi = list(window.index).index(hi_idx)
+        pos_lo = list(window.index).index(lo_idx)
+    except Exception:
+        pos_hi, pos_lo = 0, 1
+    upswing = pos_lo < pos_hi  # low first, then high
+    span = hi - lo
+    ratios = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0]
+    levels = {}
+    for r in ratios:
+        if upswing:
+            # retracement from high toward low
+            levels[r] = hi - span * r
+        else:
+            # retracement from low toward high
+            levels[r] = lo + span * r
+    return {
+        "high": hi,
+        "low": lo,
+        "upswing": upswing,
+        "levels": levels,
+        "span": span,
+    }
+
+
 def build_asset_chart(
     h_data: pd.DataFrame,
     show_candles: bool,
@@ -3272,6 +3315,8 @@ def build_asset_chart(
     btc_data: Optional[pd.DataFrame] = None,
     patterns: Optional[List[Dict]] = None,
     revision_key: str = "asset-chart",
+    show_fib: bool = False,
+    show_last_price_line: bool = False,
 ) -> go.Figure:
     h_data = h_data.copy()
     # --- Chart cutoff fixes ---
@@ -3471,6 +3516,46 @@ def build_asset_chart(
         fig.add_trace(go.Scatter(x=x_pos, y=h_data["vs_btc"], name="vs BTC %",
                                  line=dict(color="#00FFAA", width=1.8)), row=current_row, col=1)
         fig.add_hline(y=0, line_dash="dash", line_color="gray", row=current_row, col=1)
+    
+    # --- Highest-impact polish: Fib + last price level ---
+    if show_fib and "high" in h_data.columns and "low" in h_data.columns:
+        fib = compute_swing_fib_levels(h_data, lookback=min(80, len(h_data)))
+        if fib is not None:
+            colors = {
+                0.0: "#94a3b8",
+                0.236: "#38bdf8",
+                0.382: "#22d3ee",
+                0.5: "#eab308",
+                0.618: "#f97316",
+                0.786: "#ef4444",
+                1.0: "#94a3b8",
+            }
+            for r, px in fib["levels"].items():
+                fig.add_hline(
+                    y=px,
+                    line_dash="dot",
+                    line_color=colors.get(r, "#64748b"),
+                    line_width=1.2 if r not in (0.5, 0.618) else 1.8,
+                    annotation_text=f"Fib {r:.3g} · {px:.4g}",
+                    annotation_position="right",
+                    annotation_font_size=10,
+                    annotation_font_color=colors.get(r, "#94a3b8"),
+                    row=1, col=1,
+                )
+    if show_last_price_line and "close" in h_data.columns and len(h_data):
+        last_p = float(h_data["close"].iloc[-1])
+        fig.add_hline(
+            y=last_p,
+            line_dash="solid",
+            line_color="#f8fafc",
+            line_width=1.4,
+            annotation_text=f"Last {last_p:.4g}",
+            annotation_position="left",
+            annotation_font_size=11,
+            annotation_font_color="#f8fafc",
+            row=1, col=1,
+        )
+
     fig.update_layout(
         height=220 + (rows * 150),
         template="plotly_dark",
@@ -3484,10 +3569,13 @@ def build_asset_chart(
         dragmode="zoom",
         uirevision=revision_key,
         newshape=dict(
-            line=dict(color="#22d3ee", width=2),
-            fillcolor="rgba(34, 211, 238, 0.15)",
-            opacity=0.9,
+            line=dict(color="#22d3ee", width=2.5),
+            fillcolor="rgba(34, 211, 238, 0.18)",
+            opacity=1.0,
+            label=dict(text="", textposition="middle center"),
         ),
+        # Prefer pan for chart navigation; drawings still work from modebar
+        hovermode="x unified",
     )
     # Equal-width x-axis: no time gaps, chart always fills the panel
     n = len(h_data)
@@ -3597,8 +3685,17 @@ st.sidebar.subheader("Charts")
 show_candles = st.sidebar.checkbox("Candlesticks", value=True)
 show_sma50 = st.sidebar.checkbox("50 SMA", value=True)
 show_sma200 = st.sidebar.checkbox("200 SMA", value=False)
-show_rsi = st.sidebar.checkbox("RSI", value=True)
+show_rsi = st.sidebar.checkbox("RSI pane", value=True)
 show_vol_profile = st.sidebar.checkbox("Volume", value=True)
+show_fib = st.sidebar.checkbox("Fibonacci (auto swing)", value=False,
+                              help="Plots Fib retracement from the latest swing high/low in view.")
+show_last_price_line = st.sidebar.checkbox("Last price line", value=True)
+chart_range_preset = st.sidebar.selectbox(
+    "Chart range (bars in view)",
+    ["All loaded", "Last 40", "Last 80", "Last 120", "Last 200"],
+    index=0,
+    help="Trims the window for a cleaner close-up without changing resolution.",
+)
 
 with st.sidebar.expander("More indicators", expanded=False):
     show_bb = st.checkbox("Bollinger Bands", value=False)
@@ -4452,6 +4549,24 @@ if nav == "📈 Chart":
                 if show_patterns:
                     detected_patterns = detect_all_patterns(h_data)
 
+                # Range preset (bar count in view) — does not change Yahoo resolution
+                _range_map = {
+                    "All loaded": None,
+                    "Last 40": 40,
+                    "Last 80": 80,
+                    "Last 120": 120,
+                    "Last 200": 200,
+                }
+                _n_bars = _range_map.get(chart_range_preset)
+                if _n_bars and len(h_data) > _n_bars:
+                    h_data = h_data.iloc[-_n_bars:].copy()
+                    # Recompute indicators on the sliced window when possible
+                    try:
+                        if "rsi" not in h_data.columns or h_data["rsi"].isna().all():
+                            h_data = add_indicators(h_data)
+                    except Exception:
+                        pass
+
                 fig = build_asset_chart(
                     h_data=h_data,
                     show_candles=show_candles,
@@ -4469,7 +4584,9 @@ if nav == "📈 Chart":
                     show_vs_btc=show_vs_btc,
                     btc_data=btc_data,
                     patterns=detected_patterns if show_patterns else None,
-                    revision_key=f"asset-view-{m_tgt}",
+                    revision_key=f"asset-view-{m_tgt}-{chart_range_preset}",
+                    show_fib=show_fib,
+                    show_last_price_line=show_last_price_line,
                 )
                 if show_long_baseline and "long_baseline" in h_data.columns:
                     fig.add_trace(
@@ -4487,9 +4604,9 @@ if nav == "📈 Chart":
 
                 # Drawing tools help + clear (Streamlit rebuilds figures; erase is modebar-based)
                 st.caption(
-                    "✏️ **Draw:** use toolbar icons (line · freehand · closed shape · circle · rectangle). "
-                    "**Erase one:** click the eraser icon, then click the shape. "
-                    "**Move:** drag a shape. Prefer **Analyze** mode so auto-refresh doesn’t wipe drawings."
+                    "✏️ **Draw (toolbar):** line · freehand · shape · circle · rectangle · eraser. "
+                    "**Tip:** stay in **Analyze** mode so refresh doesn’t wipe drawings. "
+                    "Use **Fibonacci** + **Last price line** in the sidebar for quick levels without freehand."
                 )
                 _clr1, _clr2 = st.columns([1, 4])
                 with _clr1:
