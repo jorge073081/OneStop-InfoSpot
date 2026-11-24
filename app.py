@@ -3355,6 +3355,68 @@ def build_volume_by_price_chart(h_data: pd.DataFrame, bins: int = 28) -> Optiona
 # 5. CHART BUILDING ENGINE
 # ============================================================
 
+
+def compute_smart_levels(df: pd.DataFrame) -> dict:
+    """
+    Computed reference levels for Plotly overlays (not freehand drawings).
+    Returns dict of label -> price for levels that can be drawn as hlines.
+    """
+    out = {}
+    if df is None or getattr(df, "empty", True) or "close" not in df.columns:
+        return out
+    d = df.copy()
+    for c in ("open", "high", "low", "close"):
+        if c in d.columns:
+            d[c] = pd.to_numeric(d[c], errors="coerce")
+    close = d["close"].dropna()
+    if len(close) < 5:
+        return out
+    last = float(close.iloc[-1])
+    out["Last"] = last
+
+    has_hl = "high" in d.columns and "low" in d.columns
+    if has_hl:
+        # Recent swing high/low (last ~40 bars)
+        win = d.tail(min(40, len(d)))
+        try:
+            out["Swing High"] = float(win["high"].max())
+            out["Swing Low"] = float(win["low"].min())
+            if out["Swing High"] > out["Swing Low"]:
+                out["Swing Mid"] = (out["Swing High"] + out["Swing Low"]) / 2.0
+        except Exception:
+            pass
+
+        # Session / "day" approximation using calendar date on index when possible
+        try:
+            idx = pd.DatetimeIndex(d.index)
+            d2 = d.copy()
+            d2["_date"] = idx.date
+            last_day = d2["_date"].iloc[-1]
+            day = d2[d2["_date"] == last_day]
+            if len(day) >= 1 and "high" in day.columns:
+                out["Session High"] = float(day["high"].max())
+                out["Session Low"] = float(day["low"].min())
+            # Prior day
+            dates = sorted(d2["_date"].unique())
+            if len(dates) >= 2:
+                prev = dates[-2]
+                pday = d2[d2["_date"] == prev]
+                if len(pday) >= 1:
+                    out["Prior Day High"] = float(pday["high"].max())
+                    out["Prior Day Low"] = float(pday["low"].min())
+                    out["Prior Day Mid"] = (out["Prior Day High"] + out["Prior Day Low"]) / 2.0
+        except Exception:
+            # Fallback without datetime index: use last 1 bar as "session"
+            if has_hl:
+                out["Session High"] = float(d["high"].iloc[-1])
+                out["Session Low"] = float(d["low"].iloc[-1])
+            if len(d) >= 2 and has_hl:
+                out["Prior Bar High"] = float(d["high"].iloc[-2])
+                out["Prior Bar Low"] = float(d["low"].iloc[-2])
+
+    return {k: v for k, v in out.items() if v is not None and np.isfinite(v)}
+
+
 def compute_swing_fib_levels(df: pd.DataFrame, lookback: int = 60):
     """
     Fibonacci levels from the most recent swing high/low in `lookback` bars.
@@ -3417,6 +3479,8 @@ def build_asset_chart(
     revision_key: str = "asset-chart",
     show_fib: bool = False,
     show_last_price_line: bool = False,
+    show_smart_levels: bool = False,
+    smart_level_keys: Optional[List[str]] = None,
 ) -> go.Figure:
     h_data = h_data.copy()
     # --- Chart cutoff fixes ---
@@ -3656,6 +3720,41 @@ def build_asset_chart(
             row=1, col=1,
         )
 
+    if show_smart_levels:
+        levels = compute_smart_levels(h_data)
+        # Skip Last if last-price line already on (avoid double)
+        style = {
+            "Session High": ("#22c55e", "dash"),
+            "Session Low": ("#ef4444", "dash"),
+            "Prior Day High": ("#4ade80", "dot"),
+            "Prior Day Low": ("#f87171", "dot"),
+            "Prior Day Mid": ("#a3e635", "dot"),
+            "Swing High": ("#38bdf8", "dash"),
+            "Swing Low": ("#c084fc", "dash"),
+            "Swing Mid": ("#e879f9", "dot"),
+            "Prior Bar High": ("#4ade80", "dot"),
+            "Prior Bar Low": ("#f87171", "dot"),
+        }
+        keys = smart_level_keys or list(levels.keys())
+        for name in keys:
+            if name == "Last" and show_last_price_line:
+                continue
+            px = levels.get(name)
+            if px is None:
+                continue
+            color, dash = style.get(name, ("#94a3b8", "dot"))
+            fig.add_hline(
+                y=float(px),
+                line_dash=dash,
+                line_color=color,
+                line_width=1.15,
+                annotation_text=f"{name} {px:.4g}",
+                annotation_position="right",
+                annotation_font_size=9,
+                annotation_font_color=color,
+                row=1, col=1,
+            )
+
     fig.update_layout(
         height=220 + (rows * 150),
         template="plotly_dark",
@@ -3790,6 +3889,25 @@ show_vol_profile = st.sidebar.checkbox("Volume", value=True)
 show_fib = st.sidebar.checkbox("Fibonacci (auto swing)", value=False,
                               help="Plots Fib retracement from the latest swing high/low in view.")
 show_last_price_line = st.sidebar.checkbox("Last price line", value=True)
+show_smart_levels = st.sidebar.checkbox(
+    "Smart level overlays",
+    value=False,
+    help="Auto session / prior-day / swing high-low-mid lines from price data.",
+)
+smart_level_keys = None
+if show_smart_levels:
+    with st.sidebar.expander("Which smart levels", expanded=False):
+        _sl_opts = [
+            "Session High", "Session Low",
+            "Prior Day High", "Prior Day Low", "Prior Day Mid",
+            "Swing High", "Swing Low", "Swing Mid",
+        ]
+        smart_level_keys = st.multiselect(
+            "Levels to show",
+            options=_sl_opts,
+            default=["Session High", "Session Low", "Prior Day High", "Prior Day Low", "Swing High", "Swing Low"],
+            key="smart_level_multiselect",
+        )
 chart_range_preset = st.sidebar.selectbox(
     "Chart range (bars in view)",
     ["All loaded", "Last 40", "Last 80", "Last 120", "Last 200"],
@@ -4691,6 +4809,8 @@ if nav == "📈 Chart":
                     revision_key=f"asset-view-{m_tgt}-{chart_range_preset}",
                     show_fib=show_fib,
                     show_last_price_line=show_last_price_line,
+                    show_smart_levels=show_smart_levels,
+                    smart_level_keys=smart_level_keys if show_smart_levels else None,
                 )
                 if show_long_baseline and "long_baseline" in h_data.columns:
                     fig.add_trace(
@@ -4706,21 +4826,49 @@ if nav == "📈 Chart":
                 if last_px is not None:
                     st.metric(f"{m_tgt} last", format_price(last_px))
 
-                # Drawing tools help + clear (Streamlit rebuilds figures; erase is modebar-based)
-                st.caption(
-                    "✏️ **Draw (toolbar):** line · freehand · shape · circle · rectangle · eraser. "
-                    "**Tip:** stay in **Analyze** mode so refresh doesn’t wipe drawings. "
-                    "Use **Fibonacci** + **Last price line** in the sidebar for quick levels without freehand."
+                # Drawing toolbox (toggle) + clear
+                show_draw_toolbox = st.checkbox(
+                    "🧰 Drawing toolbox",
+                    value=False,
+                    key=f"draw_toolbox_{m_tgt}",
+                    help="Shows drawing tips and Plotly tools available on this chart.",
                 )
-                _clr1, _clr2 = st.columns([1, 4])
-                with _clr1:
-                    if st.button("Clear drawings", key=f"clear_draw_{m_tgt}"):
-                        st.session_state[f"_draw_rev_{m_tgt}"] = (
-                            int(st.session_state.get(f"_draw_rev_{m_tgt}", 0)) + 1
+                if show_draw_toolbox:
+                    with st.container():
+                        st.markdown(
+                            """
+**Plotly drawing tools** (use the chart modebar at the top-right of the chart):
+
+| Tool | Modebar icon |
+|------|----------------|
+| Trend / straight line | Draw line |
+| Freehand | Draw open path |
+| Zone / shape | Draw closed path |
+| Circle | Draw circle |
+| Rectangle | Draw rectangle |
+| Erase one shape | Eraser (then click the shape) |
+
+**Tips**
+- Stay in **Analyze** mode so Live refresh doesn’t wipe drawings.
+- Drag a shape to move it; use **Clear drawings** to reset all.
+- For auto levels (not freehand): enable **Smart level overlays**, **Fibonacci**, **Last price line** in the sidebar.
+- Plotly cannot do TV-style rays, pitchforks, or parallel channels — those need a TradingView widget.
+                            """
                         )
-                        st.rerun()
-                with _clr2:
-                    st.caption("Clears all drawn shapes on this chart (keeps pan/zoom on next interaction).")
+                        _clr1, _clr2 = st.columns([1, 4])
+                        with _clr1:
+                            if st.button("Clear drawings", key=f"clear_draw_{m_tgt}"):
+                                st.session_state[f"_draw_rev_{m_tgt}"] = (
+                                    int(st.session_state.get(f"_draw_rev_{m_tgt}", 0)) + 1
+                                )
+                                st.rerun()
+                        with _clr2:
+                            st.caption("Clears all freehand shapes on this chart.")
+                else:
+                    st.caption(
+                        "✏️ Enable **Drawing toolbox** for tool list · or use modebar (line · path · rect · circle · eraser). "
+                        "**Analyze** mode keeps drawings."
+                    )
 
                 _draw_rev = int(st.session_state.get(f"_draw_rev_{m_tgt}", 0))
                 # Rebuild revision so Plotly drops client-side shapes after Clear
