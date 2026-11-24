@@ -3356,67 +3356,6 @@ def build_volume_by_price_chart(h_data: pd.DataFrame, bins: int = 28) -> Optiona
 # ============================================================
 
 
-def compute_smart_levels(df: pd.DataFrame) -> dict:
-    """
-    Computed reference levels for Plotly overlays (not freehand drawings).
-    Returns dict of label -> price for levels that can be drawn as hlines.
-    """
-    out = {}
-    if df is None or getattr(df, "empty", True) or "close" not in df.columns:
-        return out
-    d = df.copy()
-    for c in ("open", "high", "low", "close"):
-        if c in d.columns:
-            d[c] = pd.to_numeric(d[c], errors="coerce")
-    close = d["close"].dropna()
-    if len(close) < 5:
-        return out
-    last = float(close.iloc[-1])
-    out["Last"] = last
-
-    has_hl = "high" in d.columns and "low" in d.columns
-    if has_hl:
-        # Recent swing high/low (last ~40 bars)
-        win = d.tail(min(40, len(d)))
-        try:
-            out["Swing High"] = float(win["high"].max())
-            out["Swing Low"] = float(win["low"].min())
-            if out["Swing High"] > out["Swing Low"]:
-                out["Swing Mid"] = (out["Swing High"] + out["Swing Low"]) / 2.0
-        except Exception:
-            pass
-
-        # Session / "day" approximation using calendar date on index when possible
-        try:
-            idx = pd.DatetimeIndex(d.index)
-            d2 = d.copy()
-            d2["_date"] = idx.date
-            last_day = d2["_date"].iloc[-1]
-            day = d2[d2["_date"] == last_day]
-            if len(day) >= 1 and "high" in day.columns:
-                out["Session High"] = float(day["high"].max())
-                out["Session Low"] = float(day["low"].min())
-            # Prior day
-            dates = sorted(d2["_date"].unique())
-            if len(dates) >= 2:
-                prev = dates[-2]
-                pday = d2[d2["_date"] == prev]
-                if len(pday) >= 1:
-                    out["Prior Day High"] = float(pday["high"].max())
-                    out["Prior Day Low"] = float(pday["low"].min())
-                    out["Prior Day Mid"] = (out["Prior Day High"] + out["Prior Day Low"]) / 2.0
-        except Exception:
-            # Fallback without datetime index: use last 1 bar as "session"
-            if has_hl:
-                out["Session High"] = float(d["high"].iloc[-1])
-                out["Session Low"] = float(d["low"].iloc[-1])
-            if len(d) >= 2 and has_hl:
-                out["Prior Bar High"] = float(d["high"].iloc[-2])
-                out["Prior Bar Low"] = float(d["low"].iloc[-2])
-
-    return {k: v for k, v in out.items() if v is not None and np.isfinite(v)}
-
-
 def compute_swing_fib_levels(df: pd.DataFrame, lookback: int = 60):
     """
     Fibonacci levels from the most recent swing high/low in `lookback` bars.
@@ -3479,8 +3418,6 @@ def build_asset_chart(
     revision_key: str = "asset-chart",
     show_fib: bool = False,
     show_last_price_line: bool = False,
-    show_smart_levels: bool = False,
-    smart_level_keys: Optional[List[str]] = None,
 ) -> go.Figure:
     h_data = h_data.copy()
     # --- Chart cutoff fixes ---
@@ -3720,41 +3657,6 @@ def build_asset_chart(
             row=1, col=1,
         )
 
-    if show_smart_levels:
-        levels = compute_smart_levels(h_data)
-        # Skip Last if last-price line already on (avoid double)
-        style = {
-            "Session High": ("#22c55e", "dash"),
-            "Session Low": ("#ef4444", "dash"),
-            "Prior Day High": ("#4ade80", "dot"),
-            "Prior Day Low": ("#f87171", "dot"),
-            "Prior Day Mid": ("#a3e635", "dot"),
-            "Swing High": ("#38bdf8", "dash"),
-            "Swing Low": ("#c084fc", "dash"),
-            "Swing Mid": ("#e879f9", "dot"),
-            "Prior Bar High": ("#4ade80", "dot"),
-            "Prior Bar Low": ("#f87171", "dot"),
-        }
-        keys = smart_level_keys or list(levels.keys())
-        for name in keys:
-            if name == "Last" and show_last_price_line:
-                continue
-            px = levels.get(name)
-            if px is None:
-                continue
-            color, dash = style.get(name, ("#94a3b8", "dot"))
-            fig.add_hline(
-                y=float(px),
-                line_dash=dash,
-                line_color=color,
-                line_width=1.15,
-                annotation_text=f"{name} {px:.4g}",
-                annotation_position="right",
-                annotation_font_size=9,
-                annotation_font_color=color,
-                row=1, col=1,
-            )
-
     fig.update_layout(
         height=220 + (rows * 150),
         template="plotly_dark",
@@ -3776,27 +3678,61 @@ def build_asset_chart(
         # Prefer pan for chart navigation; drawings still work from modebar
         hovermode="x unified",
     )
-    # Equal-width x-axis: no time gaps, chart always fills the panel
+    # Equal-width x-axis + cleaner date labels + price scale on the RIGHT
     n = len(h_data)
-    tick_step = max(1, n // 6) if n else 1
+    # Aim for ~6–8 ticks; avoid overcrowding
+    target_ticks = 7 if n >= 40 else max(3, min(6, n))
+    tick_step = max(1, n // target_ticks) if n else 1
     tickvals = list(range(0, n, tick_step)) if n else []
+    if n and (n - 1) not in tickvals:
+        tickvals.append(n - 1)  # always show last bar date
     ticktext = []
+    # Detect if intraday vs daily-ish from median bar spacing
+    is_intraday = False
+    try:
+        idx = pd.DatetimeIndex(time_index)
+        if len(idx) >= 3:
+            med = pd.Series(idx).diff().median()
+            if pd.notna(med) and med < pd.Timedelta(hours=20):
+                is_intraday = True
+    except Exception:
+        pass
     for i in tickvals:
         try:
-            ticktext.append(pd.Timestamp(time_index[i]).strftime("%m/%d %H:%M"))
+            ts = pd.Timestamp(time_index[i])
+            if is_intraday:
+                # e.g. 11/23 14:30
+                ticktext.append(ts.strftime("%m/%d %H:%M"))
+            else:
+                # e.g. Nov 23
+                ticktext.append(ts.strftime("%b %d"))
         except Exception:
-            ticktext.append(str(time_index[i])[:16])
+            ticktext.append(str(time_index[i])[:12])
     # IMPORTANT: do not force xaxis.range on every rebuild — that resets pan/zoom.
-    # uirevision keeps the user's view; only set ticks + disable rangeslider.
     for i in range(1, rows + 1):
         fig.update_xaxes(
             rangeslider_visible=False,
             tickvals=tickvals,
             ticktext=ticktext,
+            tickangle=0,
+            tickfont=dict(size=11, color="#94a3b8"),
+            showgrid=True,
+            gridcolor="rgba(148,163,184,0.12)",
             uirevision=revision_key,
             row=i, col=1,
         )
-        fig.update_yaxes(uirevision=revision_key, row=i, col=1)
+        # Price / indicator scale on the RIGHT (TradingView-style)
+        fig.update_yaxes(
+            side="right",
+            tickfont=dict(size=11, color="#e2e8f0"),
+            showgrid=True,
+            gridcolor="rgba(148,163,184,0.12)",
+            zeroline=False,
+            uirevision=revision_key,
+            row=i, col=1,
+        )
+    # Slightly more right margin so right-side ticks aren't clipped
+    fig.update_layout(margin=dict(l=8, r=56, t=40, b=28))
     return fig
 
 # ============================================================
@@ -3889,25 +3825,6 @@ show_vol_profile = st.sidebar.checkbox("Volume", value=True)
 show_fib = st.sidebar.checkbox("Fibonacci (auto swing)", value=False,
                               help="Plots Fib retracement from the latest swing high/low in view.")
 show_last_price_line = st.sidebar.checkbox("Last price line", value=True)
-show_smart_levels = st.sidebar.checkbox(
-    "Smart level overlays",
-    value=False,
-    help="Auto session / prior-day / swing high-low-mid lines from price data.",
-)
-smart_level_keys = None
-if show_smart_levels:
-    with st.sidebar.expander("Which smart levels", expanded=False):
-        _sl_opts = [
-            "Session High", "Session Low",
-            "Prior Day High", "Prior Day Low", "Prior Day Mid",
-            "Swing High", "Swing Low", "Swing Mid",
-        ]
-        smart_level_keys = st.multiselect(
-            "Levels to show",
-            options=_sl_opts,
-            default=["Session High", "Session Low", "Prior Day High", "Prior Day Low", "Swing High", "Swing Low"],
-            key="smart_level_multiselect",
-        )
 chart_range_preset = st.sidebar.selectbox(
     "Chart range (bars in view)",
     ["All loaded", "Last 40", "Last 80", "Last 120", "Last 200"],
@@ -4809,8 +4726,6 @@ if nav == "📈 Chart":
                     revision_key=f"asset-view-{m_tgt}-{chart_range_preset}",
                     show_fib=show_fib,
                     show_last_price_line=show_last_price_line,
-                    show_smart_levels=show_smart_levels,
-                    smart_level_keys=smart_level_keys if show_smart_levels else None,
                 )
                 if show_long_baseline and "long_baseline" in h_data.columns:
                     fig.add_trace(
