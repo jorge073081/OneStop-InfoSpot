@@ -844,7 +844,7 @@ def _daily_calendar_metrics(ticker: str):
         return None
 
 
-def generate_chart_auto_brief(ticker: str, hist) -> dict:
+def generate_chart_auto_brief(ticker: str, hist, news_items=None) -> dict:
     """
     Automatic chart analysis brief for one ticker.
 
@@ -964,6 +964,106 @@ def generate_chart_auto_brief(ticker: str, hist) -> dict:
         bullets.append("Recent price action on this TF favors higher highs.")
     if lower_low and score <= 0:
         bullets.append("Recent price action on this TF shows lower-low pressure.")
+
+
+    # --- Liquidity (from chart volume; free, no extra API) ---
+    try:
+        if "volume" in df.columns and "close" in df.columns:
+            vol = df["volume"].dropna()
+            if len(vol) >= 5:
+                v_last = float(vol.iloc[-1])
+                v_avg20 = float(vol.tail(20).mean()) if len(vol) >= 20 else float(vol.mean())
+                px = last
+                dollar_vol = v_last * px if px else 0.0
+                # Relative volume
+                rvol = (v_last / v_avg20) if v_avg20 and v_avg20 > 0 else None
+                if dollar_vol >= 50_000_000:
+                    bullets.append(f"Liquidity: deep session (~${dollar_vol/1e6:.1f}M turnover, this TF).")
+                    score += 0  # neutral-positive context
+                elif dollar_vol >= 5_000_000:
+                    bullets.append(f"Liquidity: adequate (~${dollar_vol/1e6:.1f}M turnover, this TF).")
+                elif dollar_vol >= 500_000:
+                    bullets.append(f"Liquidity: moderate (~${dollar_vol/1e6:.2f}M). Size carefully.")
+                    score -= 0
+                else:
+                    bullets.append(f"Liquidity: thin (~${dollar_vol:,.0f} turnover). Slippage risk.")
+                    score -= 1
+                if rvol is not None:
+                    if rvol >= 2.0:
+                        bullets.append(f"Volume spike: {rvol:.1f}× vs recent avg (interest rising).")
+                    elif rvol <= 0.5:
+                        bullets.append(f"Volume quiet: {rvol:.1f}× vs recent avg (low participation).")
+        else:
+            bullets.append("Liquidity: volume not available on this series.")
+    except Exception:
+        bullets.append("Liquidity: could not estimate from volume.")
+
+    # --- News risk flags (keyword scan on free RSS headlines) ---
+    RISK_KW = [
+        "unlock", "vesting", "cliff", "unlocks",
+        "hack", "exploit", "breach", "insolvent",
+        "sec ", "lawsuit", "indictment", "charge",
+        "delist", "delisting", "halt",
+        "bankrupt", "insolvency",
+        "investigation", "subpoena",
+    ]
+    POS_KW = [
+        "etf approved", "etf launch", "listing", "partnership",
+        "upgrade", "mainnet", "buyback", "approval",
+    ]
+    news_items = news_items or []
+    # Match ticker-related headlines
+    base = str(ticker).upper().replace("-USD", "").replace("USDT", "").strip()
+    aliases = {
+        "BTC": ["bitcoin", "btc"],
+        "ETH": ["ethereum", "ether", "eth"],
+        "SOL": ["solana", "sol"],
+        "XRP": ["xrp", "ripple"],
+        "ONDO": ["ondo"],
+        "DOGE": ["doge", "dogecoin"],
+        "ADA": ["cardano", "ada"],
+        "AVAX": ["avalanche", "avax"],
+        "LINK": ["chainlink", "link"],
+        "AAPL": ["apple", "aapl"],
+        "TSLA": ["tesla", "tsla"],
+        "NVDA": ["nvidia", "nvda"],
+    }
+    keys = [base.lower(), str(ticker).lower()]
+    keys += [a.lower() for a in aliases.get(base, [])]
+    related = []
+    for art in news_items:
+        title = str(art.get("title") or "")
+        blob = f"{title} {art.get('summary', '')}".lower()
+        if any(k and k in blob for k in keys):
+            related.append(title)
+    risk_hits = []
+    pos_hits = []
+    for title in related:
+        tl = title.lower()
+        if any(k in tl for k in RISK_KW):
+            risk_hits.append(title)
+        if any(k in tl for k in POS_KW):
+            pos_hits.append(title)
+    if risk_hits:
+        score -= 1
+        bullets.append(f"News risk flag: {risk_hits[0][:110]}")
+        if len(risk_hits) > 1:
+            bullets.append(f"+{len(risk_hits)-1} more risk-related headline(s) for {base}.")
+    elif related:
+        bullets.append(f"News: {len(related)} recent headline(s) mention {base} (no major risk keywords).")
+        # show one
+        bullets.append(f"Latest: {related[0][:110]}")
+    else:
+        bullets.append("News: no ticker-matched headlines in free feeds right now.")
+    if pos_hits and not risk_hits:
+        score += 1
+        bullets.append(f"Positive headline cue: {pos_hits[0][:110]}")
+
+    # Unlock honesty note (no free global unlock API)
+    if any("unlock" in (t or "").lower() or "vesting" in (t or "").lower() for t in related):
+        bullets.append("Unlock/vesting mentioned in headlines — verify schedule on project docs / TokenUnlocks.")
+    else:
+        bullets.append("Unlock calendar: not covered by free data — verify manually if relevant.")
 
     # Bias
     if score >= 3:
@@ -4516,7 +4616,11 @@ if nav == "📈 Chart":
             if m_tgt and m_tgt in data:
                 h_data = data[m_tgt].copy()
                 if auto_chart_brief:
-                    brief = generate_chart_auto_brief(m_tgt, h_data)
+                    try:
+                        _news_for_brief = get_market_news(cache_buster="chart_brief", max_items=50)
+                    except Exception:
+                        _news_for_brief = []
+                    brief = generate_chart_auto_brief(m_tgt, h_data, news_items=_news_for_brief)
                     st.markdown(
                         f"""
                         <div style="background:#12161c; border:1px solid {brief['color']};
