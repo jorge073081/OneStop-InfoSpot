@@ -536,7 +536,9 @@ def compute_volatility_stats(data: Dict[str, pd.DataFrame], window: int = 30) ->
 
 
 def compute_multi_period_performance(data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
-    """Performance over multiple lookback periods."""
+    """Performance over multiple lookback periods.
+    Expects *daily* (or same-interval) frames in `data`. Bar count ≈ trading days.
+    """
     rows = []
     for t, df in data.items():
         if df is None or len(df) < 5 or "close" not in df.columns:
@@ -806,10 +808,49 @@ def calculate_market_regime(
 
 
 
+def _daily_calendar_metrics(ticker: str):
+    """
+    Calendar-ish metrics from daily bars (not chart resolution bars).
+    7d / 30d returns and 30-session high/low so weekly/hourly/15m briefs stay accurate.
+    """
+    try:
+        hist = yf.Ticker(ticker).history(period="6mo", interval="1d", auto_adjust=True)
+        if hist is None or hist.empty:
+            return None
+        hist = hist.copy()
+        hist.columns = [str(c).lower() for c in hist.columns]
+        if "close" not in hist.columns:
+            return None
+        close = hist["close"].dropna()
+        if len(close) < 10:
+            return None
+        last = float(close.iloc[-1])
+        r7 = (last / float(close.iloc[-8]) - 1) * 100 if len(close) > 8 else None
+        r30 = (last / float(close.iloc[-31]) - 1) * 100 if len(close) > 31 else None
+        high_30 = float(close.tail(30).max())
+        low_30 = float(close.tail(30).min())
+        dist_high = (last / high_30 - 1) * 100 if high_30 else 0.0
+        dist_low = (last / low_30 - 1) * 100 if low_30 else 0.0
+        return {
+            "last": last,
+            "r7": r7,
+            "r30": r30,
+            "high_30": high_30,
+            "low_30": low_30,
+            "dist_high": dist_high,
+            "dist_low": dist_low,
+        }
+    except Exception:
+        return None
+
+
 def generate_chart_auto_brief(ticker: str, hist) -> dict:
     """
     Automatic chart analysis brief for one ticker.
-    Uses price vs SMAs, RSI, structure, drawdown, recent returns.
+
+    Structure (SMA / RSI / local swings) uses the *selected chart timeframe*.
+    7d / 30d % and 30-day high/low always use *daily* calendar metrics so
+    weekly / hourly / 15m charts do not invent fake multi-week moves.
     """
     out = {
         "bias": "Neutral",
@@ -822,7 +863,6 @@ def generate_chart_auto_brief(ticker: str, hist) -> dict:
         return out
 
     df = hist.copy()
-    # Ensure indicators if missing
     try:
         if "sma50" not in df.columns or "rsi" not in df.columns:
             df = add_indicators(df)
@@ -837,90 +877,93 @@ def generate_chart_auto_brief(ticker: str, hist) -> dict:
     prev = float(close.iloc[-2]) if len(close) > 1 else last
     chg_1 = (last / prev - 1) * 100 if prev else 0.0
 
-    def _ret(n):
-        if len(close) > n:
-            return (last / float(close.iloc[-n - 1]) - 1) * 100
-        return None
-
-    r7 = _ret(7)
-    r30 = _ret(min(30, len(close) - 2))
-
     sma50 = float(df["sma50"].iloc[-1]) if "sma50" in df.columns and pd.notna(df["sma50"].iloc[-1]) else None
     sma200 = float(df["sma200"].iloc[-1]) if "sma200" in df.columns and pd.notna(df["sma200"].iloc[-1]) else None
     rsi = float(df["rsi"].iloc[-1]) if "rsi" in df.columns and pd.notna(df["rsi"].iloc[-1]) else None
 
-    high_30 = float(close.tail(30).max())
-    low_30 = float(close.tail(30).min())
-    dist_high = (last / high_30 - 1) * 100 if high_30 else 0
-    dist_low = (last / low_30 - 1) * 100 if low_30 else 0
+    # Calendar metrics (always daily) — fixes wrong 7d/30d on 15m/1h/1w
+    cal = _daily_calendar_metrics(ticker)
+    if cal is not None:
+        r7 = cal["r7"]
+        r30 = cal["r30"]
+        dist_high = cal["dist_high"]
+        dist_low = cal["dist_low"]
+    else:
+        # Fallback only if daily fetch fails: bar-based (less ideal)
+        def _ret(n):
+            if len(close) > n:
+                return (last / float(close.iloc[-n - 1]) - 1) * 100
+            return None
+        r7 = _ret(7)
+        r30 = _ret(min(30, len(close) - 2))
+        high_30 = float(close.tail(min(30, len(close))).max())
+        low_30 = float(close.tail(min(30, len(close))).min())
+        dist_high = (last / high_30 - 1) * 100 if high_30 else 0.0
+        dist_low = (last / low_30 - 1) * 100 if low_30 else 0.0
 
-    # Simple structure: compare recent swing vs prior
+    # Local structure on the *chart* timeframe (intentional)
     tail = close.tail(20)
-    higher_high = float(tail.iloc[-1]) > float(tail.iloc[-10]) and float(tail.max()) >= float(close.tail(40).max()) * 0.98
-    lower_low = float(tail.min()) <= float(close.tail(40).min()) * 1.02 and float(tail.iloc[-1]) < float(tail.iloc[-10])
+    higher_high = float(tail.iloc[-1]) > float(tail.iloc[-10]) and float(tail.max()) >= float(close.tail(min(40, len(close))).max()) * 0.98
+    lower_low = float(tail.min()) <= float(close.tail(min(40, len(close))).min()) * 1.02 and float(tail.iloc[-1]) < float(tail.iloc[-10])
 
     score = 0
     bullets = []
 
-    # Trend
+    # Trend (chart TF)
     if sma50 and sma200:
         if last > sma50 and last > sma200 and sma50 >= sma200:
             score += 2
-            bullets.append(f"Uptrend structure: price above 50 & 200 SMA (50 ≥ 200).")
+            bullets.append("Uptrend structure (this chart TF): price above 50 & 200 SMA (50 ≥ 200).")
         elif last > sma50 and last > sma200:
             score += 1
-            bullets.append("Price above both 50 and 200 SMA.")
+            bullets.append("Price above both 50 and 200 SMA (this chart TF).")
         elif last < sma50 and last < sma200 and sma50 <= sma200:
             score -= 2
-            bullets.append("Downtrend structure: price below 50 & 200 SMA (50 ≤ 200).")
+            bullets.append("Downtrend structure (this chart TF): price below 50 & 200 SMA (50 ≤ 200).")
         elif last < sma50 and last < sma200:
             score -= 1
-            bullets.append("Price below both 50 and 200 SMA.")
+            bullets.append("Price below both 50 and 200 SMA (this chart TF).")
         else:
-            bullets.append("Mixed vs moving averages (possible transition).")
+            bullets.append("Mixed vs moving averages on this chart TF (possible transition).")
     elif sma50:
         if last > sma50:
             score += 1
-            bullets.append(f"Price above 50 SMA ({sma50:.4g}).")
+            bullets.append(f"Price above 50 SMA ({sma50:.4g}) on this chart TF.")
         else:
             score -= 1
-            bullets.append(f"Price below 50 SMA ({sma50:.4g}).")
+            bullets.append(f"Price below 50 SMA ({sma50:.4g}) on this chart TF.")
 
-    # RSI
+    # RSI (chart TF)
     if rsi is not None:
         if rsi >= 70:
             score -= 1
-            bullets.append(f"RSI elevated at {rsi:.0f} (overbought risk).")
+            bullets.append(f"RSI elevated at {rsi:.0f} on this TF (overbought risk).")
         elif rsi <= 30:
             score += 1
-            bullets.append(f"RSI low at {rsi:.0f} (oversold / washout zone).")
+            bullets.append(f"RSI low at {rsi:.0f} on this TF (oversold / washout zone).")
         elif 45 <= rsi <= 65:
             score += 1
-            bullets.append(f"RSI healthy-neutral at {rsi:.0f}.")
+            bullets.append(f"RSI healthy-neutral at {rsi:.0f} on this TF.")
         else:
-            bullets.append(f"RSI at {rsi:.0f}.")
+            bullets.append(f"RSI at {rsi:.0f} on this TF.")
 
-    # Position in range
+    # Calendar position in range
     if dist_high >= -3:
-        bullets.append(f"Near 30-day high ({dist_high:+.1f}%).")
-        if score > 0:
-            score += 0  # extended but trend ok
-        else:
-            score -= 0
+        bullets.append(f"Near 30-day high ({dist_high:+.1f}%, calendar daily).")
     elif dist_high <= -15:
-        bullets.append(f"Well off 30-day high ({dist_high:+.1f}%).")
+        bullets.append(f"Well off 30-day high ({dist_high:+.1f}%, calendar daily).")
     if dist_low <= 5 and dist_low >= 0:
-        bullets.append(f"Close to 30-day low (+{dist_low:.1f}% off low).")
+        bullets.append(f"Close to 30-day low (+{dist_low:.1f}% off low, calendar daily).")
 
     if r7 is not None:
-        bullets.append(f"7d change: {r7:+.1f}%.")
+        bullets.append(f"7d change: {r7:+.1f}% (calendar daily).")
     if r30 is not None:
-        bullets.append(f"~30d change: {r30:+.1f}%.")
+        bullets.append(f"~30d change: {r30:+.1f}% (calendar daily).")
 
     if higher_high and score >= 0:
-        bullets.append("Recent price action favors higher highs.")
+        bullets.append("Recent price action on this TF favors higher highs.")
     if lower_low and score <= 0:
-        bullets.append("Recent price action shows lower-low pressure.")
+        bullets.append("Recent price action on this TF shows lower-low pressure.")
 
     # Bias
     if score >= 3:
