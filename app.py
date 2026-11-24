@@ -4741,61 +4741,21 @@ if nav == "📈 Chart":
                 if last_px is not None:
                     st.metric(f"{m_tgt} last", format_price(last_px))
 
-                # Drawing toolbox — pick tool here (sets Plotly dragmode)
-                show_draw_toolbox = st.checkbox(
-                    "🧰 Drawing toolbox",
-                    value=False,
-                    key=f"draw_toolbox_{m_tgt}",
-                    help="Pick a drawing tool; the chart switches into that mode.",
-                )
-                # Default navigation mode
-                _dragmode = "zoom"
-                if show_draw_toolbox:
-                    st.markdown("**Pick a tool** (chart enters that mode):")
-                    _tool = st.radio(
-                        "Drawing tool",
-                        options=[
-                            "Pan / zoom (navigate)",
-                            "Trend line",
-                            "Freehand",
-                            "Rectangle zone",
-                            "Circle",
-                            "Closed shape",
-                        ],
-                        index=0,
-                        horizontal=True,
-                        key=f"draw_tool_pick_{m_tgt}",
-                        label_visibility="collapsed",
-                    )
-                    _tool_map = {
-                        "Pan / zoom (navigate)": "zoom",
-                        "Trend line": "drawline",
-                        "Freehand": "drawopenpath",
-                        "Rectangle zone": "drawrect",
-                        "Circle": "drawcircle",
-                        "Closed shape": "drawclosedpath",
-                    }
-                    _dragmode = _tool_map.get(_tool, "zoom")
-                    _c1, _c2, _c3 = st.columns([1, 1, 3])
-                    with _c1:
-                        if st.button("Clear drawings", key=f"clear_draw_{m_tgt}"):
-                            st.session_state[f"_draw_rev_{m_tgt}"] = (
-                                int(st.session_state.get(f"_draw_rev_{m_tgt}", 0)) + 1
-                            )
-                            st.rerun()
-                    with _c2:
-                        st.caption(f"Mode: **{_dragmode}**")
-                    with _c3:
-                        st.caption(
-                            "Stay in **Analyze** mode so drawings persist. "
-                            "Eraser is still on the chart modebar (top-right). "
-                            "Smart levels / Fib are separate sidebar overlays."
+                # Drawings: Plotly modebar only (top-right). Avoid custom tool toggles —
+                # switching Streamlit widgets reruns and wipes client-side shapes.
+                _clr1, _clr2 = st.columns([1, 4])
+                with _clr1:
+                    if st.button("Clear drawings", key=f"clear_draw_{m_tgt}"):
+                        st.session_state[f"_draw_rev_{m_tgt}"] = (
+                            int(st.session_state.get(f"_draw_rev_{m_tgt}", 0)) + 1
                         )
-                else:
+                        st.rerun()
+                with _clr2:
                     st.caption(
-                        "✏️ Open **Drawing toolbox** to pick line / freehand / rect / circle · "
-                        "or use the chart modebar. **Analyze** mode keeps drawings."
+                        "✏️ Use the **chart toolbar (top-right)** for line · freehand · rect · circle · eraser. "
+                        "Stay in **Analyze** mode so refresh doesn’t wipe drawings."
                     )
+                _dragmode = "zoom"
 
                 _draw_rev = int(st.session_state.get(f"_draw_rev_{m_tgt}", 0))
                 # Apply toolbox tool (or zoom) + keep uirevision for pan/drawings
@@ -4827,7 +4787,7 @@ if nav == "📈 Chart":
                         ],
                         "modeBarButtonsToRemove": ["lasso2d", "select2d"],
                     },
-                    key=f"asset_chart_draw_{m_tgt}_{_draw_rev}_{_dragmode}",
+                    key=f"asset_chart_draw_{m_tgt}_{_draw_rev}",
                 )
 
                 if show_vol_profile:
