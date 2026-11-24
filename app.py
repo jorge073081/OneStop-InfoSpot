@@ -4826,53 +4826,68 @@ if nav == "📈 Chart":
                 if last_px is not None:
                     st.metric(f"{m_tgt} last", format_price(last_px))
 
-                # Drawing toolbox (toggle) + clear
+                # Drawing toolbox — pick tool here (sets Plotly dragmode)
                 show_draw_toolbox = st.checkbox(
                     "🧰 Drawing toolbox",
                     value=False,
                     key=f"draw_toolbox_{m_tgt}",
-                    help="Shows drawing tips and Plotly tools available on this chart.",
+                    help="Pick a drawing tool; the chart switches into that mode.",
                 )
+                # Default navigation mode
+                _dragmode = "zoom"
                 if show_draw_toolbox:
-                    with st.container():
-                        st.markdown(
-                            """
-**Plotly drawing tools** (use the chart modebar at the top-right of the chart):
-
-| Tool | Modebar icon |
-|------|----------------|
-| Trend / straight line | Draw line |
-| Freehand | Draw open path |
-| Zone / shape | Draw closed path |
-| Circle | Draw circle |
-| Rectangle | Draw rectangle |
-| Erase one shape | Eraser (then click the shape) |
-
-**Tips**
-- Stay in **Analyze** mode so Live refresh doesn’t wipe drawings.
-- Drag a shape to move it; use **Clear drawings** to reset all.
-- For auto levels (not freehand): enable **Smart level overlays**, **Fibonacci**, **Last price line** in the sidebar.
-- Plotly cannot do TV-style rays, pitchforks, or parallel channels — those need a TradingView widget.
-                            """
+                    st.markdown("**Pick a tool** (chart enters that mode):")
+                    _tool = st.radio(
+                        "Drawing tool",
+                        options=[
+                            "Pan / zoom (navigate)",
+                            "Trend line",
+                            "Freehand",
+                            "Rectangle zone",
+                            "Circle",
+                            "Closed shape",
+                        ],
+                        index=0,
+                        horizontal=True,
+                        key=f"draw_tool_pick_{m_tgt}",
+                        label_visibility="collapsed",
+                    )
+                    _tool_map = {
+                        "Pan / zoom (navigate)": "zoom",
+                        "Trend line": "drawline",
+                        "Freehand": "drawopenpath",
+                        "Rectangle zone": "drawrect",
+                        "Circle": "drawcircle",
+                        "Closed shape": "drawclosedpath",
+                    }
+                    _dragmode = _tool_map.get(_tool, "zoom")
+                    _c1, _c2, _c3 = st.columns([1, 1, 3])
+                    with _c1:
+                        if st.button("Clear drawings", key=f"clear_draw_{m_tgt}"):
+                            st.session_state[f"_draw_rev_{m_tgt}"] = (
+                                int(st.session_state.get(f"_draw_rev_{m_tgt}", 0)) + 1
+                            )
+                            st.rerun()
+                    with _c2:
+                        st.caption(f"Mode: **{_dragmode}**")
+                    with _c3:
+                        st.caption(
+                            "Stay in **Analyze** mode so drawings persist. "
+                            "Eraser is still on the chart modebar (top-right). "
+                            "Smart levels / Fib are separate sidebar overlays."
                         )
-                        _clr1, _clr2 = st.columns([1, 4])
-                        with _clr1:
-                            if st.button("Clear drawings", key=f"clear_draw_{m_tgt}"):
-                                st.session_state[f"_draw_rev_{m_tgt}"] = (
-                                    int(st.session_state.get(f"_draw_rev_{m_tgt}", 0)) + 1
-                                )
-                                st.rerun()
-                        with _clr2:
-                            st.caption("Clears all freehand shapes on this chart.")
                 else:
                     st.caption(
-                        "✏️ Enable **Drawing toolbox** for tool list · or use modebar (line · path · rect · circle · eraser). "
-                        "**Analyze** mode keeps drawings."
+                        "✏️ Open **Drawing toolbox** to pick line / freehand / rect / circle · "
+                        "or use the chart modebar. **Analyze** mode keeps drawings."
                     )
 
                 _draw_rev = int(st.session_state.get(f"_draw_rev_{m_tgt}", 0))
-                # Rebuild revision so Plotly drops client-side shapes after Clear
-                fig.update_layout(uirevision=f"asset-view-{m_tgt}-d{_draw_rev}")
+                # Apply toolbox tool (or zoom) + keep uirevision for pan/drawings
+                fig.update_layout(
+                    uirevision=f"asset-view-{m_tgt}-d{_draw_rev}",
+                    dragmode=_dragmode,
+                )
 
                 st.plotly_chart(
                     fig,
@@ -4897,7 +4912,7 @@ if nav == "📈 Chart":
                         ],
                         "modeBarButtonsToRemove": ["lasso2d", "select2d"],
                     },
-                    key=f"asset_chart_draw_{m_tgt}_{_draw_rev}",
+                    key=f"asset_chart_draw_{m_tgt}_{_draw_rev}_{_dragmode}",
                 )
 
                 if show_vol_profile:
